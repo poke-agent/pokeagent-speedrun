@@ -518,10 +518,17 @@ class LMStudioBackend(VLMBackend):
         self.requests = requests
 
         # Configuration for faster responses
-        self.max_tokens = kwargs.get('max_tokens', 500)  # Shorter responses by default
+        self.max_tokens = kwargs.get('max_tokens', 4096)  # Shorter responses by default
         self.timeout = kwargs.get('timeout', 120)  # 2 minute timeout
         self.temperature = kwargs.get('temperature', 0.7)  # Lower for more focused responses
-        self.cooldown = kwargs.get('cooldown', 3.0)  # Cooldown period in seconds after each call
+        self.cooldown = kwargs.get('cooldown', 5.0)  # Cooldown period in seconds after each call
+        self.top_p = kwargs.get('top_p', 0.8)
+        self.top_k = kwargs.get('top_k', 20)
+        self.seed = kwargs.get('seed', 3407)
+        self.greedy = kwargs.get('greedy', 'false')
+        self.repetition_penalty = kwargs.get('repetition_penalty', 1.0)
+        self.presence_penalty = kwargs.get('presence_penalty', 1.5)
+        self.out_seq_length = kwargs.get('out_seq_length', 32768)
 
         # Track last call time for cooldown
         self._last_call_time = 0
@@ -607,6 +614,13 @@ class LMStudioBackend(VLMBackend):
                 ],
                 "max_tokens": self.max_tokens,
                 "temperature": self.temperature,
+                "top_p": self.top_p,
+                "top_k": self.top_k,
+                "seed": self.seed,
+                "greedy": self.greedy,
+                "repetition_penalty": self.repetition_penalty,
+                "presence_penalty": self.presence_penalty,
+                "out_seq_length": self.out_seq_length,
                 "stream": False  # Disable streaming for simpler handling
             }
 
