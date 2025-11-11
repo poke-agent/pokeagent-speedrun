@@ -112,7 +112,18 @@ class FrontierDetector:
         # Extract map data
         map_data = game_state.get('map', {})
         if not map_data:
-            logger.warning("No map data available for frontier detection")
+            logger.debug("No map data available for frontier detection")
+            return []
+
+        # Check for valid tiles
+        raw_tiles = map_data.get('tiles', [])
+        if not raw_tiles or len(raw_tiles) == 0:
+            logger.debug("Map has no tiles data for frontier detection")
+            return []
+
+        # Check for map corruption (happens during transitions)
+        if len(raw_tiles) < 5 or (isinstance(raw_tiles[0], list) and len(raw_tiles[0]) < 5):
+            logger.debug("Map data corrupted or too small for frontier detection (transition?)")
             return []
 
         # Find a good starting point for BFS (prefer center of explored area)

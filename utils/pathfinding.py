@@ -102,12 +102,21 @@ class Pathfinder:
     def _extract_map_data(self, game_state: Dict) -> Optional[Dict]:
         """Extract map data from game state."""
         # Try to get map data from various possible locations in game state
+        # Most common location: game_state['map']
+        if 'map' in game_state:
+            map_info = game_state['map']
+            # Check if it has tiles (indicates valid map data)
+            if isinstance(map_info, dict) and 'tiles' in map_info:
+                return map_info
+
+        # Fallback locations
         if 'map_data' in game_state:
             return game_state['map_data']
         elif 'game_state' in game_state and 'map_data' in game_state['game_state']:
             return game_state['game_state']['map_data']
         elif 'visual' in game_state and 'map' in game_state['visual']:
             return game_state['visual']['map']
+
         return None
     
     def _get_blocked_positions(self, game_state: Dict, map_data: Dict) -> Set[Tuple[int, int]]:

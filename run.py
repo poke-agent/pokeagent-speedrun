@@ -21,11 +21,16 @@ def start_server(args):
     # Use the same Python executable that's running this script
     python_exe = sys.executable
     server_cmd = [python_exe, "-m", "server.app", "--port", str(args.port)]
-    
+
     # Pass through server-relevant arguments
     if args.record:
         server_cmd.append("--record")
-    
+
+    # Pass emulator speed multiplier
+    if args.emulator_speed != 1.0:
+        server_cmd.extend(["--emulator-speed", str(args.emulator_speed)])
+        print(f"⚡ Passing --emulator-speed {args.emulator_speed} to server")
+
     if args.load_checkpoint:
         # Auto-load checkpoint.state when --load-checkpoint is used
         checkpoint_state = ".pokeagent_cache/checkpoint.state"
@@ -101,11 +106,19 @@ def main():
     
     # Agent configuration
     parser.add_argument("--backend", type=str, default="gemini",
-                       help="VLM backend (openai, gemini, local, openrouter, vertex)")
+                       help="VLM backend (openai, gemini, local, openrouter, vertex, lmstudio)")
     parser.add_argument("--model-name", type=str, default="gemini-2.5-flash",
                        help="Model name to use")
     parser.add_argument("--vertex-id", type=str,
                        help="Google Cloud project ID for Vertex AI backend (required for --backend vertex)")
+    parser.add_argument("--lmstudio-url", type=str, default="http://localhost:1234/v1",
+                       help="Base URL for LM Studio API (default: http://localhost:1234/v1)")
+    parser.add_argument("--lmstudio-max-tokens", type=int, default=500,
+                       help="Max tokens for LM Studio responses (default: 500, lower = faster)")
+    parser.add_argument("--lmstudio-timeout", type=int, default=60,
+                       help="Timeout in seconds for LM Studio API calls (default: 60)")
+    parser.add_argument("--lmstudio-cooldown", type=float, default=3.0,
+                       help="Cooldown in seconds between LM Studio API calls (default: 3.0)")
     parser.add_argument("--scaffold", type=str, default="simple",
                        choices=["simple", "react"],
                        help="Agent scaffold: simple (default) or react")
@@ -125,6 +138,8 @@ def main():
                        help="Record video of the gameplay")
     parser.add_argument("--no-ocr", action="store_true",
                        help="Disable OCR dialogue detection")
+    parser.add_argument("--emulator-speed", type=float, default=1.0,
+                       help="Emulator speed multiplier (1.0=normal, 2.0=2x, 3.0=3x faster)")
 
     args = parser.parse_args()
 
@@ -135,7 +150,11 @@ def main():
     print("=" * 60)
     print("🎮 Pokemon Emerald AI Agent")
     print("=" * 60)
-    
+
+    # Display emulator speed if not default
+    if args.emulator_speed != 1.0:
+        print(f"⚡ Emulator Speed: {args.emulator_speed}x")
+
     server_process = None
     frame_server_process = None
     

@@ -1368,9 +1368,12 @@ class SimpleAgent:
                     logger.warning(f"Frontier detection failed: {e}", exc_info=True)
                     frontier_suggestions = ""
 
+            # Check if using local/compact mode for smaller models
+            use_compact_prompt = os.getenv('COMPACT_PROMPT', 'false').lower() == 'true'
+
             # Build pathfinding rules section (only if not in title sequence)
             pathfinding_rules = ""
-            if context != "title":
+            if context != "title" and not use_compact_prompt:
                 pathfinding_rules = """
 🚨 PATHFINDING RULES:
 1. **SINGLE STEP FIRST**: Always prefer single actions (UP, DOWN, LEFT, RIGHT, A, B) unless you're 100% certain about multi-step paths
@@ -1408,8 +1411,39 @@ EXAMPLE - DO THIS INSTEAD:
 - NPCs can trigger battles or dialogue, which may be useful for objectives
 """
 
-            # Create enhanced prompt with objectives, history context and chain of thought request
-            prompt = f"""You are playing as the Protagonist in Pokemon Emerald. Progress quickly to the milestones by balancing exploration and exploitation of things you know, but have fun for the Twitch stream while you do it.
+            # Create prompt - use compact mode for local models or full mode for cloud
+            if use_compact_prompt:
+                # COMPACT MODE for local models (reduced token count)
+                prompt = f"""Pokemon Emerald agent. Choose next action based on game state.
+
+RECENT ACTIONS: {recent_actions_str}
+
+OBJECTIVES:
+{objectives_summary}
+
+{frontier_suggestions}
+
+GAME STATE:
+{formatted_state}
+
+{movement_memory}
+
+Actions: A, B, START, SELECT, UP, DOWN, LEFT, RIGHT
+
+Rules:
+- Dialogue: Press A to advance/close
+- Movement: Single steps preferred (UP/DOWN/LEFT/RIGHT)
+- Avoid walls (#) and failed movements
+- Check map before moving
+
+Response format:
+ACTION: [single action like 'RIGHT' or 'A']
+REASON: [brief explanation]
+
+Context: {context} | Coords: {coords}"""
+            else:
+                # FULL MODE for cloud models (detailed prompt)
+                prompt = f"""You are playing as the Protagonist in Pokemon Emerald. Progress quickly to the milestones by balancing exploration and exploitation of things you know, but have fun for the Twitch stream while you do it.
             Based on the current game frame and state information, think through your next move and choose the best button action.
             If you notice that you are repeating the same action sequences over and over again, you definitely need to try something different since what you are doing is wrong! Try exploring different new areas or interacting with different NPCs if you are stuck.
 

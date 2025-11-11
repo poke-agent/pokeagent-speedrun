@@ -521,6 +521,10 @@ class LMStudioBackend(VLMBackend):
         self.max_tokens = kwargs.get('max_tokens', 500)  # Shorter responses by default
         self.timeout = kwargs.get('timeout', 120)  # 2 minute timeout
         self.temperature = kwargs.get('temperature', 0.7)  # Lower for more focused responses
+        self.cooldown = kwargs.get('cooldown', 3.0)  # Cooldown period in seconds after each call
+
+        # Track last call time for cooldown
+        self._last_call_time = 0
 
         # Define retryable errors
         self.retryable_errors = (
@@ -529,7 +533,20 @@ class LMStudioBackend(VLMBackend):
             requests.exceptions.RequestException
         )
 
-        logger.info(f"LM Studio backend initialized with base URL: {base_url}, max_tokens: {self.max_tokens}, timeout: {self.timeout}s")
+        logger.info(f"LM Studio backend initialized with base URL: {base_url}, max_tokens: {self.max_tokens}, timeout: {self.timeout}s, cooldown: {self.cooldown}s")
+
+    def _apply_cooldown(self):
+        """Apply cooldown period between API calls to avoid overwhelming local model"""
+        if self.cooldown > 0:
+            current_time = time.time()
+            time_since_last_call = current_time - self._last_call_time
+
+            if time_since_last_call < self.cooldown:
+                sleep_time = self.cooldown - time_since_last_call
+                logger.debug(f"Applying cooldown: sleeping for {sleep_time:.2f}s")
+                time.sleep(sleep_time)
+
+            self._last_call_time = time.time()
 
     def _encode_image_to_base64(self, img: Union[Image.Image, np.ndarray]) -> str:
         """Encode image to base64 data URL"""
@@ -568,6 +585,9 @@ class LMStudioBackend(VLMBackend):
 
     def get_query(self, img: Union[Image.Image, np.ndarray], text: str, module_name: str = "Unknown") -> str:
         """Process an image and text prompt using LM Studio API"""
+        # Apply cooldown before making request
+        self._apply_cooldown()
+
         start_time = time.time()
 
         try:
@@ -639,6 +659,9 @@ class LMStudioBackend(VLMBackend):
 
     def get_text_query(self, text: str, module_name: str = "Unknown") -> str:
         """Process a text-only prompt using LM Studio API"""
+        # Apply cooldown before making request
+        self._apply_cooldown()
+
         start_time = time.time()
 
         try:

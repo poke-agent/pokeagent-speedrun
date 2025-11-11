@@ -46,6 +46,8 @@ class Agent:
             vlm_kwargs['max_tokens'] = args.lmstudio_max_tokens
         if args and hasattr(args, 'lmstudio_timeout'):
             vlm_kwargs['timeout'] = args.lmstudio_timeout
+        if args and hasattr(args, 'lmstudio_cooldown'):
+            vlm_kwargs['cooldown'] = args.lmstudio_cooldown
 
         # Initialize VLM
         self.vlm = VLM(backend=backend, model_name=model_name, **vlm_kwargs)
