@@ -504,6 +504,204 @@ class LegacyOllamaBackend(VLMBackend):
         
         return result
 
+class LMStudioBackend(VLMBackend):
+    """LM Studio local API backend (OpenAI-compatible)"""
+
+    def __init__(self, model_name: str, base_url: str = "http://localhost:1234/v1", **kwargs):
+        try:
+            import requests
+        except ImportError:
+            raise ImportError("Requests package not found. Install with: pip install requests")
+
+        self.model_name = model_name
+        self.base_url = base_url
+        self.requests = requests
+
+        # Configuration for faster responses
+        self.max_tokens = kwargs.get('max_tokens', 500)  # Shorter responses by default
+        self.timeout = kwargs.get('timeout', 120)  # 2 minute timeout
+        self.temperature = kwargs.get('temperature', 0.7)  # Lower for more focused responses
+
+        # Define retryable errors
+        self.retryable_errors = (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.RequestException
+        )
+
+        logger.info(f"LM Studio backend initialized with base URL: {base_url}, max_tokens: {self.max_tokens}, timeout: {self.timeout}s")
+
+    def _encode_image_to_base64(self, img: Union[Image.Image, np.ndarray]) -> str:
+        """Encode image to base64 data URL"""
+        # Handle both PIL Images and numpy arrays
+        if hasattr(img, 'convert'):  # It's a PIL Image
+            image = img
+        elif hasattr(img, 'shape'):  # It's a numpy array
+            image = Image.fromarray(img)
+        else:
+            raise ValueError(f"Unsupported image type: {type(img)}")
+
+        buffered = BytesIO()
+        image.save(buffered, format="PNG")
+        image_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+        return f"data:image/png;base64,{image_base64}"
+
+    def _call_completion(self, payload):
+        """Calls the LM Studio API with exponential backoff."""
+        def _make_request():
+            response = self.requests.post(
+                f"{self.base_url}/chat/completions",
+                headers={"Content-Type": "application/json"},
+                json=payload,
+                timeout=self.timeout
+            )
+            response.raise_for_status()
+            return response.json()
+
+        # Apply retry wrapper with reduced retries for faster failure
+        return retry_with_exponential_backoff(
+            _make_request,
+            errors=self.retryable_errors,
+            max_retries=3,  # Fewer retries for local server
+            initial_delay=0.5  # Shorter initial delay
+        )()
+
+    def get_query(self, img: Union[Image.Image, np.ndarray], text: str, module_name: str = "Unknown") -> str:
+        """Process an image and text prompt using LM Studio API"""
+        start_time = time.time()
+
+        try:
+            # Encode image to base64
+            base64_image = self._encode_image_to_base64(img)
+
+            payload = {
+                "model": self.model_name,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": text},
+                            {"type": "image_url", "image_url": {"url": base64_image}}
+                        ]
+                    }
+                ],
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+                "stream": False  # Disable streaming for simpler handling
+            }
+
+            # Log the prompt
+            prompt_preview = text[:2000] + "..." if len(text) > 2000 else text
+            logger.info(f"[{module_name}] LM STUDIO VLM IMAGE QUERY:")
+            logger.info(f"[{module_name}] PROMPT: {prompt_preview}")
+
+            response_json = self._call_completion(payload)
+            result = response_json['choices'][0]['message']['content']
+            duration = time.time() - start_time
+
+            # Extract token usage if available
+            token_usage = {}
+            if 'usage' in response_json:
+                usage = response_json['usage']
+                token_usage = {
+                    "prompt_tokens": usage.get('prompt_tokens', 0),
+                    "completion_tokens": usage.get('completion_tokens', 0),
+                    "total_tokens": usage.get('total_tokens', 0)
+                }
+
+            # Log the interaction
+            log_llm_interaction(
+                interaction_type=f"lmstudio_{module_name}",
+                prompt=text,
+                response=result,
+                duration=duration,
+                metadata={"model": self.model_name, "backend": "lmstudio", "has_image": True, "token_usage": token_usage},
+                model_info={"model": self.model_name, "backend": "lmstudio"}
+            )
+
+            # Log the response
+            result_preview = result[:1000] + "..." if len(result) > 1000 else result
+            logger.info(f"[{module_name}] RESPONSE: {result_preview}")
+            logger.info(f"[{module_name}] ---")
+
+            return result
+
+        except Exception as e:
+            duration = time.time() - start_time
+            log_llm_error(
+                interaction_type=f"lmstudio_{module_name}",
+                prompt=text,
+                error=str(e),
+                metadata={"model": self.model_name, "backend": "lmstudio", "duration": duration, "has_image": True}
+            )
+            logger.error(f"LM Studio API error: {e}")
+            raise
+
+    def get_text_query(self, text: str, module_name: str = "Unknown") -> str:
+        """Process a text-only prompt using LM Studio API"""
+        start_time = time.time()
+
+        try:
+            payload = {
+                "model": self.model_name,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": text}]
+                    }
+                ],
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+                "stream": False
+            }
+
+            # Log the prompt
+            prompt_preview = text[:2000] + "..." if len(text) > 2000 else text
+            logger.info(f"[{module_name}] LM STUDIO VLM TEXT QUERY:")
+            logger.info(f"[{module_name}] PROMPT: {prompt_preview}")
+
+            response_json = self._call_completion(payload)
+            result = response_json['choices'][0]['message']['content']
+            duration = time.time() - start_time
+
+            # Extract token usage if available
+            token_usage = {}
+            if 'usage' in response_json:
+                usage = response_json['usage']
+                token_usage = {
+                    "prompt_tokens": usage.get('prompt_tokens', 0),
+                    "completion_tokens": usage.get('completion_tokens', 0),
+                    "total_tokens": usage.get('total_tokens', 0)
+                }
+
+            # Log the interaction
+            log_llm_interaction(
+                interaction_type=f"lmstudio_{module_name}",
+                prompt=text,
+                response=result,
+                duration=duration,
+                metadata={"model": self.model_name, "backend": "lmstudio", "has_image": False, "token_usage": token_usage},
+                model_info={"model": self.model_name, "backend": "lmstudio"}
+            )
+
+            # Log the response
+            result_preview = result[:1000] + "..." if len(result) > 1000 else result
+            logger.info(f"[{module_name}] RESPONSE: {result_preview}")
+            logger.info(f"[{module_name}] ---")
+
+            return result
+
+        except Exception as e:
+            duration = time.time() - start_time
+            log_llm_error(
+                interaction_type=f"lmstudio_{module_name}",
+                prompt=text,
+                error=str(e),
+                metadata={"model": self.model_name, "backend": "lmstudio", "duration": duration, "has_image": False}
+            )
+            logger.error(f"LM Studio API error: {e}")
+            raise
+
 class VertexBackend(VLMBackend):
     """Google Gemini API with Vertex backend"""
 
@@ -815,7 +1013,7 @@ class GeminiBackend(VLMBackend):
 
 class VLM:
     """Main VLM class that supports multiple backends"""
-    
+
     BACKENDS = {
         'openai': OpenAIBackend,
         'openrouter': OpenRouterBackend,
@@ -823,17 +1021,18 @@ class VLM:
         'gemini': GeminiBackend,
         'ollama': LegacyOllamaBackend,  # Legacy support
         'vertex': VertexBackend,  # Added Vertex backend
+        'lmstudio': LMStudioBackend,  # LM Studio local API
     }
     
     def __init__(self, model_name: str, backend: str = 'openai', port: int = 8010, **kwargs):
         """
         Initialize VLM with specified backend
-        
+
         Args:
             model_name: Name of the model to use
-            backend: Backend type ('openai', 'openrouter', 'local', 'gemini', 'ollama')
+            backend: Backend type ('openai', 'openrouter', 'local', 'gemini', 'ollama', 'lmstudio', 'vertex')
             port: Port for Ollama backend (legacy)
-            **kwargs: Additional arguments passed to backend
+            **kwargs: Additional arguments passed to backend (e.g., base_url for lmstudio)
         """
         self.model_name = model_name
         self.backend_type = backend.lower()
