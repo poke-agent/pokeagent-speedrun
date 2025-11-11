@@ -518,10 +518,10 @@ class LMStudioBackend(VLMBackend):
         self.requests = requests
 
         # Configuration for faster responses
-        self.max_tokens = kwargs.get('max_tokens', 4096)  # Shorter responses by default
+        self.max_tokens = kwargs.get('max_tokens', 2048)  # Shorter responses by default
         self.timeout = kwargs.get('timeout', 120)  # 2 minute timeout
         self.temperature = kwargs.get('temperature', 0.7)  # Lower for more focused responses
-        self.cooldown = kwargs.get('cooldown', 5.0)  # Cooldown period in seconds after each call
+        self.cooldown = kwargs.get('cooldown', 20.0)  # Cooldown period in seconds after each call
         self.top_p = kwargs.get('top_p', 0.8)
         self.top_k = kwargs.get('top_k', 20)
         self.seed = kwargs.get('seed', 3407)
@@ -544,16 +544,21 @@ class LMStudioBackend(VLMBackend):
 
     def _apply_cooldown(self):
         """Apply cooldown period between API calls to avoid overwhelming local model"""
-        if self.cooldown > 0:
+        if self.cooldown > 0 and self._last_call_time > 0:
             current_time = time.time()
             time_since_last_call = current_time - self._last_call_time
 
             if time_since_last_call < self.cooldown:
                 sleep_time = self.cooldown - time_since_last_call
-                logger.debug(f"Applying cooldown: sleeping for {sleep_time:.2f}s")
+                logger.info(f"⏱️  LM Studio cooldown: waiting {sleep_time:.1f}s (cooldown={self.cooldown}s, since_last={time_since_last_call:.1f}s)")
                 time.sleep(sleep_time)
+            else:
+                logger.info(f"⏱️  No cooldown needed: {time_since_last_call:.1f}s since last call (cooldown={self.cooldown}s)")
 
-            self._last_call_time = time.time()
+    def _update_last_call_time(self):
+        """Update the last call time to now (call this AFTER request completes)"""
+        self._last_call_time = time.time()
+        logger.debug(f"⏱️  Updated last call time: {self._last_call_time}")
 
     def _encode_image_to_base64(self, img: Union[Image.Image, np.ndarray]) -> str:
         """Encode image to base64 data URL"""
@@ -573,21 +578,37 @@ class LMStudioBackend(VLMBackend):
     def _call_completion(self, payload):
         """Calls the LM Studio API with exponential backoff."""
         def _make_request():
-            response = self.requests.post(
-                f"{self.base_url}/chat/completions",
-                headers={"Content-Type": "application/json"},
-                json=payload,
-                timeout=self.timeout
-            )
-            response.raise_for_status()
-            return response.json()
+            try:
+                response = self.requests.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={"Content-Type": "application/json"},
+                    json=payload,
+                    timeout=self.timeout
+                )
+                response.raise_for_status()
+                return response.json()
+            except self.requests.exceptions.HTTPError as e:
+                # Check for specific error messages in response
+                if e.response is not None:
+                    try:
+                        error_json = e.response.json()
+                        error_msg = error_json.get('error', {}).get('message', str(e))
+                        if 'Channel Error' in error_msg or 'channel' in error_msg.lower():
+                            logger.warning(f"LM Studio Channel Error detected - model may be overloaded or crashed")
+                            # Apply additional cooldown before retry
+                            time.sleep(self.cooldown)
+                    except:
+                        pass
+                raise
 
-        # Apply retry wrapper with reduced retries for faster failure
+        # Apply retry wrapper with cooldown-based delay for retries
+        # Use cooldown as initial delay to avoid overwhelming local server
+        # Reduced to 2 retries since we add extra cooldown on channel errors
         return retry_with_exponential_backoff(
             _make_request,
             errors=self.retryable_errors,
-            max_retries=3,  # Fewer retries for local server
-            initial_delay=0.5  # Shorter initial delay
+            max_retries=2,  # Reduced retries - let cooldown do the work
+            initial_delay=max(self.cooldown, 1.0)  # Use cooldown or minimum 1s
         )()
 
     def get_query(self, img: Union[Image.Image, np.ndarray], text: str, module_name: str = "Unknown") -> str:
@@ -633,6 +654,9 @@ class LMStudioBackend(VLMBackend):
             result = response_json['choices'][0]['message']['content']
             duration = time.time() - start_time
 
+            # Update last call time AFTER successful request completes
+            self._update_last_call_time()
+
             # Extract token usage if available
             token_usage = {}
             if 'usage' in response_json:
@@ -662,6 +686,10 @@ class LMStudioBackend(VLMBackend):
 
         except Exception as e:
             duration = time.time() - start_time
+
+            # Update last call time even on error to enforce cooldown
+            self._update_last_call_time()
+
             log_llm_error(
                 interaction_type=f"lmstudio_{module_name}",
                 prompt=text,
@@ -701,6 +729,9 @@ class LMStudioBackend(VLMBackend):
             result = response_json['choices'][0]['message']['content']
             duration = time.time() - start_time
 
+            # Update last call time AFTER successful request completes
+            self._update_last_call_time()
+
             # Extract token usage if available
             token_usage = {}
             if 'usage' in response_json:
@@ -730,6 +761,10 @@ class LMStudioBackend(VLMBackend):
 
         except Exception as e:
             duration = time.time() - start_time
+
+            # Update last call time even on error to enforce cooldown
+            self._update_last_call_time()
+
             log_llm_error(
                 interaction_type=f"lmstudio_{module_name}",
                 prompt=text,
