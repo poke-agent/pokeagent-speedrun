@@ -40,6 +40,12 @@ class Agent:
         vlm_kwargs = {}
         if args and hasattr(args, 'vertex_id') and args.vertex_id:
             vlm_kwargs['vertex_id'] = args.vertex_id
+        if args and hasattr(args, 'lmstudio_url') and args.lmstudio_url:
+            vlm_kwargs['base_url'] = args.lmstudio_url
+        if args and hasattr(args, 'lmstudio_max_tokens'):
+            vlm_kwargs['max_tokens'] = args.lmstudio_max_tokens
+        if args and hasattr(args, 'lmstudio_timeout'):
+            vlm_kwargs['timeout'] = args.lmstudio_timeout
 
         # Initialize VLM
         self.vlm = VLM(backend=backend, model_name=model_name, **vlm_kwargs)

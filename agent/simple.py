@@ -183,6 +183,12 @@ class SimpleAgent:
         self.navigation_target = None  # Target coordinates (x, y) for navigation
         self.navigation_stuck_count = 0  # Track if navigation is stuck
 
+        # Frontier-based exploration state
+        self.unreachable_frontiers = set()  # Track frontiers that cannot be reached
+        self.last_detected_frontiers = []  # Cache last detected frontiers for frontier navigation
+        self.consecutive_collisions = 0  # Track collisions for frontier abandonment
+        self.consecutive_movements = 0  # Track successful movements
+
         # Initialize storyline objectives for Emerald progression
         self._initialize_storyline_objectives()
 
@@ -587,6 +593,46 @@ class SimpleAgent:
         self.navigation_path = None
         self.navigation_target = None
         self.navigation_stuck_count = 0
+
+    def _navigate_to_frontier_index(self, frontier_index: int, game_state: Dict[str, Any]) -> Optional[str]:
+        """
+        Navigate to a frontier selected by index from last detection.
+
+        Args:
+            frontier_index: 1-based index of frontier from VLM prompt (1-5)
+            game_state: Current game state
+
+        Returns:
+            First navigation action, or None if navigation failed
+        """
+        try:
+            # Convert to 0-based index
+            index = frontier_index - 1
+
+            if not self.last_detected_frontiers or index < 0 or index >= len(self.last_detected_frontiers):
+                logger.warning(f"Invalid frontier index {frontier_index} (have {len(self.last_detected_frontiers)} frontiers)")
+                return None
+
+            # Get frontier coordinates
+            score, target_x, target_y = self.last_detected_frontiers[index]
+            target = (target_x, target_y)
+
+            logger.info(f"🎯 VLM selected FRONTIER_{frontier_index}: {target} (score: {score:.1f})")
+
+            # Start navigation to frontier
+            if self.start_navigation(target, game_state):
+                # Get first action from navigation path
+                action = self.get_next_navigation_action(game_state)
+                if action:
+                    logger.info(f"🧭 Starting frontier navigation: {action} toward {target}")
+                    return action
+
+            logger.warning(f"Failed to start navigation to frontier {target}")
+            return None
+
+        except Exception as e:
+            logger.error(f"Error navigating to frontier index {frontier_index}: {e}", exc_info=True)
+            return None
 
     def find_object_on_map(self, game_state: Dict[str, Any], symbol: str) -> Optional[Tuple[int, int]]:
         """
@@ -1276,6 +1322,52 @@ class SimpleAgent:
             completed_objectives_list = self.get_completed_objectives()
             objectives_summary = self._format_objectives_for_llm(active_objectives, completed_objectives_list)
 
+            # FRONTIER-BASED EXPLORATION: Detect exploration targets (only in overworld)
+            frontier_suggestions = ""
+            if context == "overworld" and coords:
+                try:
+                    from utils.frontier_detection import FrontierDetector
+
+                    # Initialize detector
+                    frontier_detector = FrontierDetector(
+                        max_search_depth=50,
+                        max_frontiers_returned=20,
+                        distance_penalty_factor=0.5,
+                        enable_randomization=True
+                    )
+
+                    # Get current objective coords for bonus scoring
+                    current_objective_coords = None
+                    if active_objectives:
+                        for obj in active_objectives:
+                            if obj.target_coords and not obj.completed:
+                                current_objective_coords = obj.target_coords
+                                break
+
+                    # Detect frontiers
+                    frontiers = frontier_detector.detect_frontiers(
+                        game_state=game_state,
+                        player_pos=coords,
+                        unreachable=self.unreachable_frontiers,
+                        current_objective=current_objective_coords
+                    )
+
+                    # Cache frontiers for FRONTIER_N command parsing
+                    self.last_detected_frontiers = frontiers
+
+                    # Format for prompt
+                    if frontiers:
+                        frontier_suggestions = frontier_detector.format_frontiers_for_prompt(
+                            frontiers, max_display=5
+                        )
+                        logger.info(f"🎯 Detected {len(frontiers)} frontiers for exploration")
+                    else:
+                        logger.debug("No frontiers detected (fully explored or no map data)")
+
+                except Exception as e:
+                    logger.warning(f"Frontier detection failed: {e}", exc_info=True)
+                    frontier_suggestions = ""
+
             # Build pathfinding rules section (only if not in title sequence)
             pathfinding_rules = ""
             if context != "title":
@@ -1341,6 +1433,8 @@ LOCATION/CONTEXT HISTORY (last {self.history_display_count} steps):
 
 CURRENT OBJECTIVES:
 {objectives_summary}
+
+{frontier_suggestions}
 
 CURRENT GAME STATE:
 {formatted_state}
@@ -1487,6 +1581,20 @@ Context: {context} | Coords: {coords} """
         """Parse action response from LLM into list of valid actions"""
         response_upper = response.upper().strip()
         valid_actions = ["A", "B", "START", "SELECT", "UP", "DOWN", "LEFT", "RIGHT", "WAIT"]
+
+        # Check for FRONTIER_N commands first (e.g., FRONTIER_1, FRONTIER_2, etc.)
+        import re
+        frontier_match = re.search(r'FRONTIER[_\s](\d+)', response_upper)
+        if frontier_match and game_state:
+            frontier_index = int(frontier_match.group(1))
+            logger.info(f"🎯 Detected FRONTIER_{frontier_index} command from VLM")
+
+            # Trigger navigation to the selected frontier
+            action = self._navigate_to_frontier_index(frontier_index, game_state)
+            if action:
+                return [action]
+            else:
+                logger.warning(f"Failed to navigate to FRONTIER_{frontier_index}, falling back to normal parsing")
 
         # Parse multiple actions (could be comma or space separated)
         actions_found = []
