@@ -31,7 +31,30 @@ def start_server(args):
         server_cmd.extend(["--emulator-speed", str(args.emulator_speed)])
         print(f"⚡ Passing --emulator-speed {args.emulator_speed} to server")
 
-    if args.load_checkpoint:
+    if args.load_milestone:
+        # Load from a specific milestone checkpoint
+        import glob
+
+        # Check if it's a direct path or a milestone name
+        if os.path.exists(args.load_milestone) and args.load_milestone.endswith('.state'):
+            # Direct path to state file
+            milestone_path = args.load_milestone
+        else:
+            # Milestone name - find the latest checkpoint for this milestone
+            checkpoint_pattern = f"checkpoints/milestones/{args.load_milestone}_*.state"
+            matching_files = sorted(glob.glob(checkpoint_pattern), reverse=True)
+
+            if matching_files:
+                milestone_path = matching_files[0]  # Most recent
+            else:
+                print(f"⚠️  No checkpoint found for milestone: {args.load_milestone}")
+                print(f"   Looking for: {checkpoint_pattern}")
+                milestone_path = None
+
+        if milestone_path:
+            server_cmd.extend(["--load-state", milestone_path])
+            print(f"🎯 Server will load milestone checkpoint: {milestone_path}")
+    elif args.load_checkpoint:
         # Auto-load checkpoint.state when --load-checkpoint is used
         checkpoint_state = ".pokeagent_cache/checkpoint.state"
         if os.path.exists(checkpoint_state):
@@ -99,10 +122,12 @@ def main():
                        help="Port for web interface")
     
     # State loading
-    parser.add_argument("--load-state", type=str, 
+    parser.add_argument("--load-state", type=str,
                        help="Load a saved state file on startup")
-    parser.add_argument("--load-checkpoint", action="store_true", 
+    parser.add_argument("--load-checkpoint", action="store_true",
                        help="Load from checkpoint files")
+    parser.add_argument("--load-milestone", type=str,
+                       help="Load from a specific milestone checkpoint (e.g., 'INTRO_CUTSCENE_COMPLETE' or path to .state file)")
     
     # Agent configuration
     parser.add_argument("--backend", type=str, default="gemini",
@@ -117,8 +142,8 @@ def main():
                        help="Max tokens for LM Studio responses (default: 500, lower = faster)")
     parser.add_argument("--lmstudio-timeout", type=int, default=60,
                        help="Timeout in seconds for LM Studio API calls (default: 60)")
-    parser.add_argument("--lmstudio-cooldown", type=float, default=3.0,
-                       help="Cooldown in seconds between LM Studio API calls (default: 3.0)")
+    parser.add_argument("--lmstudio-cooldown", type=float, default=10.0,
+                       help="Cooldown in seconds between LM Studio API calls (default: 10.0)")
     parser.add_argument("--scaffold", type=str, default="simple",
                        choices=["simple", "react"],
                        help="Agent scaffold: simple (default) or react")
