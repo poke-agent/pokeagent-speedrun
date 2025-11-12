@@ -117,8 +117,8 @@ class ModelOptimizer:
             "strengths": ["speed", "vision"],
             "prompt_style": "compact",
             "max_prompt_tokens": 5000,
-            "compact_mode": True,
-            "add_strategic_context": False,
+            "compact_mode": False,
+            "add_strategic_context": True,
             "add_examples": False,
         },
 

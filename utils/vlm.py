@@ -44,15 +44,35 @@ def retry_with_exponential_backoff(
 
 class VLMBackend(ABC):
     """Abstract base class for VLM backends"""
-    
+
     @abstractmethod
     def get_query(self, img: Union[Image.Image, np.ndarray], text: str, module_name: str = "Unknown") -> str:
         """Process an image and text prompt"""
         pass
-    
+
     @abstractmethod
     def get_text_query(self, text: str, module_name: str = "Unknown") -> str:
         """Process a text-only prompt"""
+        pass
+
+    @abstractmethod
+    def get_query_multi_image(
+        self,
+        images: List[Union[Image.Image, np.ndarray]],
+        text: str,
+        module_name: str = "Unknown"
+    ) -> str:
+        """
+        Process multiple images with a text prompt.
+
+        Args:
+            images: List of PIL Images or numpy arrays (e.g., [game_frame, overview_map])
+            text: Text prompt
+            module_name: Module identifier for logging
+
+        Returns:
+            VLM response text
+        """
         pass
 
 class OpenAIBackend(VLMBackend):
@@ -142,10 +162,98 @@ class OpenAIBackend(VLMBackend):
             logger.error(f"OpenAI API error: {e}")
             raise
     
+    def get_query_multi_image(
+        self,
+        images: List[Union[Image.Image, np.ndarray]],
+        text: str,
+        module_name: str = "Unknown"
+    ) -> str:
+        """Process multiple images with text prompt using OpenAI API"""
+        start_time = time.time()
+
+        # Convert all images to base64
+        image_contents = []
+        for img in images:
+            # Handle both PIL Images and numpy arrays
+            if hasattr(img, 'convert'):  # It's a PIL Image
+                image = img
+            elif hasattr(img, 'shape'):  # It's a numpy array
+                image = Image.fromarray(img)
+            else:
+                logger.warning(f"Skipping unsupported image type: {type(img)}")
+                continue
+
+            buffered = BytesIO()
+            image.save(buffered, format="PNG")
+            image_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+            image_contents.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{image_base64}"}
+            })
+
+        # Build message with text + all images
+        content = [{"type": "text", "text": text}] + image_contents
+
+        messages = [{
+            "role": "user",
+            "content": content
+        }]
+
+        try:
+            response = self._call_completion(messages)
+            result = response.choices[0].message.content
+            duration = time.time() - start_time
+
+            # Extract token usage
+            token_usage = {}
+            if hasattr(response, 'usage'):
+                token_usage = {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens
+                }
+
+            # Log the interaction
+            log_llm_interaction(
+                interaction_type=f"openai_{module_name}_multi",
+                prompt=text,
+                response=result,
+                duration=duration,
+                metadata={
+                    "model": self.model_name,
+                    "backend": "openai",
+                    "has_image": True,
+                    "image_count": len(images),
+                    "token_usage": token_usage
+                },
+                model_info={"model": self.model_name, "backend": "openai"}
+            )
+
+            return result
+        except Exception as e:
+            duration = time.time() - start_time
+            log_llm_error(
+                interaction_type=f"openai_{module_name}_multi",
+                prompt=text,
+                error=str(e),
+                metadata={
+                    "model": self.model_name,
+                    "backend": "openai",
+                    "duration": duration,
+                    "image_count": len(images)
+                }
+            )
+            logger.error(f"OpenAI multi-image API error: {e}")
+            # Fallback to single image if multi-image fails
+            if len(images) > 0:
+                logger.info("Falling back to single image mode")
+                return self.get_query(images[0], text, module_name)
+            raise
+
     def get_text_query(self, text: str, module_name: str = "Unknown") -> str:
         """Process a text-only prompt using OpenAI API"""
         start_time = time.time()
-        
+
         messages = [{
             "role": "user",
             "content": [{"type": "text", "text": text}]
@@ -252,26 +360,137 @@ class OpenRouterBackend(VLMBackend):
         
         return result
     
+    def get_query_multi_image(
+        self,
+        images: List[Union[Image.Image, np.ndarray]],
+        text: str,
+        module_name: str = "Unknown"
+    ) -> str:
+        """Process multiple images with a text prompt using OpenRouter API
+
+        Args:
+            images: List of images (PIL Images or numpy arrays)
+            text: Text prompt to send with the images
+            module_name: Name of the module making the request (for logging)
+
+        Returns:
+            The model's text response
+
+        Note:
+            OpenRouter uses the OpenAI API format, so we encode images as base64 URLs.
+            Multiple images are supported via multiple image_url content blocks.
+        """
+        start_time = time.time()
+
+        try:
+            # Convert all images to base64
+            image_contents = []
+            for img in images:
+                try:
+                    # Handle both PIL Images and numpy arrays
+                    if hasattr(img, 'convert'):  # It's a PIL Image
+                        image = img
+                    elif hasattr(img, 'shape'):  # It's a numpy array
+                        image = Image.fromarray(img)
+                    else:
+                        logger.warning(f"[{module_name}] Skipping unsupported image type: {type(img)}")
+                        continue
+
+                    buffered = BytesIO()
+                    image.save(buffered, format="PNG")
+                    image_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+
+                    image_contents.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{image_base64}"}
+                    })
+                except Exception as e:
+                    logger.warning(f"[{module_name}] Failed to encode image: {e}. Skipping this image.")
+                    continue
+
+            if not image_contents:
+                logger.error(f"[{module_name}] No valid images to process. Falling back to text-only query.")
+                return self.get_text_query(text, module_name)
+
+            # Build message: text first, then all images
+            content = [{"type": "text", "text": text}] + image_contents
+            messages = [{"role": "user", "content": content}]
+
+            # Log the prompt
+            prompt_preview = text[:2000] + "..." if len(text) > 2000 else text
+            logger.info(f"[{module_name}] OPENROUTER VLM MULTI-IMAGE QUERY (images={len(image_contents)}):")
+            logger.info(f"[{module_name}] PROMPT: {prompt_preview}")
+
+            # Make the API call
+            response = self._call_completion(messages)
+            result = response.choices[0].message.content
+            duration = time.time() - start_time
+
+            # Extract token usage if available
+            token_usage = {}
+            if hasattr(response, 'usage'):
+                token_usage = {
+                    "prompt_tokens": getattr(response.usage, 'prompt_tokens', 0),
+                    "completion_tokens": getattr(response.usage, 'completion_tokens', 0),
+                    "total_tokens": getattr(response.usage, 'total_tokens', 0)
+                }
+
+            # Log the interaction
+            log_llm_interaction(
+                interaction_type=f"openrouter_{module_name}",
+                prompt=text,
+                response=result,
+                duration=duration,
+                metadata={
+                    "model": self.model_name,
+                    "backend": "openrouter",
+                    "has_image": True,
+                    "image_count": len(image_contents),
+                    "token_usage": token_usage
+                },
+                model_info={"model": self.model_name, "backend": "openrouter"}
+            )
+
+            # Log the response
+            result_preview = result[:1000] + "..." if len(result) > 1000 else result
+            logger.info(f"[{module_name}] RESPONSE: {result_preview}")
+            logger.info(f"[{module_name}] ---")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"[{module_name}] Error in OpenRouter multi-image query: {e}")
+            # Fallback to single image
+            if len(images) > 0:
+                logger.info(f"[{module_name}] Falling back to single image query")
+                try:
+                    return self.get_query(images[0], text, module_name)
+                except Exception as fallback_error:
+                    logger.error(f"[{module_name}] Single image fallback also failed: {fallback_error}")
+            # Final fallback to text-only
+            logger.info(f"[{module_name}] Falling back to text-only query")
+            return self.get_text_query(text, module_name)
+
     def get_text_query(self, text: str, module_name: str = "Unknown") -> str:
         """Process a text-only prompt using OpenRouter API"""
         messages = [{
             "role": "user",
             "content": [{"type": "text", "text": text}]
         }]
-        
+
         # Log the prompt
         prompt_preview = text[:2000] + "..." if len(text) > 2000 else text
         logger.info(f"[{module_name}] OPENROUTER VLM TEXT QUERY:")
         logger.info(f"[{module_name}] PROMPT: {prompt_preview}")
-        
+
         response = self._call_completion(messages)
         result = response.choices[0].message.content
-        
+
         # Log the response
         result_preview = result[:1000] + "..." if len(result) > 1000 else result
         logger.info(f"[{module_name}] RESPONSE: {result_preview}")
         logger.info(f"[{module_name}] ---")
-        
+
         return result
 
 class LocalHuggingFaceBackend(VLMBackend):
@@ -412,6 +631,89 @@ class LocalHuggingFaceBackend(VLMBackend):
         
         return self._generate_response(inputs, text, module_name)
     
+    def get_query_multi_image(
+        self,
+        images: List[Union[Image.Image, np.ndarray]],
+        text: str,
+        module_name: str = "Unknown"
+    ) -> str:
+        """Process multiple images with a text prompt using local HuggingFace model
+
+        Args:
+            images: List of images (PIL Images or numpy arrays)
+            text: Text prompt to send with the images
+            module_name: Name of the module making the request (for logging)
+
+        Returns:
+            The model's text response
+
+        Note:
+            HuggingFace models may have varying support for multi-image inputs.
+            Some models accept lists of images, while others may only support single images.
+            Falls back to single image if multi-image is not supported.
+        """
+        start_time = time.time()
+
+        try:
+            # Convert all images to PIL format
+            pil_images = []
+            for img in images:
+                try:
+                    # Handle both PIL Images and numpy arrays
+                    if hasattr(img, 'convert'):  # It's a PIL Image
+                        pil_images.append(img)
+                    elif hasattr(img, 'shape'):  # It's a numpy array
+                        pil_images.append(Image.fromarray(img))
+                    else:
+                        logger.warning(f"[{module_name}] Skipping unsupported image type: {type(img)}")
+                        continue
+                except Exception as e:
+                    logger.warning(f"[{module_name}] Failed to prepare image: {e}. Skipping this image.")
+                    continue
+
+            if not pil_images:
+                logger.error(f"[{module_name}] No valid images to process. Falling back to text-only query.")
+                return self.get_text_query(text, module_name)
+
+            # Build message content with multiple images
+            # Some models support {"type": "image", "image": img} format for each image
+            content = []
+            for img in pil_images:
+                content.append({"type": "image", "image": img})
+            content.append({"type": "text", "text": text})
+
+            messages = [{"role": "user", "content": content}]
+
+            try:
+                # Try multi-image format
+                formatted_text = self.processor.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True)
+                inputs = self.processor(text=formatted_text, images=pil_images, return_tensors="pt")
+
+                logger.info(f"[{module_name}] Processing with {len(pil_images)} images using local HuggingFace model")
+                return self._generate_response(inputs, text, module_name)
+
+            except Exception as processor_error:
+                logger.warning(f"[{module_name}] Multi-image format not supported by this model: {processor_error}")
+                # Fallback to single image
+                if len(pil_images) > 0:
+                    logger.info(f"[{module_name}] Falling back to single image (first image only)")
+                    return self.get_query(pil_images[0], text, module_name)
+                return self.get_text_query(text, module_name)
+
+        except Exception as e:
+            logger.error(f"[{module_name}] Error in local multi-image query: {e}")
+            # Fallback to single image
+            if len(images) > 0:
+                logger.info(f"[{module_name}] Falling back to single image query")
+                try:
+                    return self.get_query(images[0], text, module_name)
+                except Exception as fallback_error:
+                    logger.error(f"[{module_name}] Single image fallback also failed: {fallback_error}")
+            # Final fallback to text-only
+            logger.info(f"[{module_name}] Falling back to text-only query")
+            return self.get_text_query(text, module_name)
+
     def get_text_query(self, text: str, module_name: str = "Unknown") -> str:
         """Process a text-only prompt using local HuggingFace model"""
         # For text-only queries, use simple text format without image
@@ -421,7 +723,7 @@ class LocalHuggingFaceBackend(VLMBackend):
         formatted_text = self.processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True)
         inputs = self.processor(text=formatted_text, return_tensors="pt")
-        
+
         return self._generate_response(inputs, text, module_name)
 
 class LegacyOllamaBackend(VLMBackend):
@@ -482,26 +784,126 @@ class LegacyOllamaBackend(VLMBackend):
         
         return result
     
+    def get_query_multi_image(
+        self,
+        images: List[Union[Image.Image, np.ndarray]],
+        text: str,
+        module_name: str = "Unknown"
+    ) -> str:
+        """Process multiple images with a text prompt using legacy Ollama backend
+
+        Args:
+            images: List of images (PIL Images or numpy arrays)
+            text: Text prompt to send with the images
+            module_name: Name of the module making the request (for logging)
+
+        Returns:
+            The model's text response
+
+        Note:
+            Ollama uses OpenAI-compatible API format with base64 images.
+        """
+        start_time = time.time()
+
+        try:
+            # Convert all images to base64
+            image_contents = []
+            for img in images:
+                try:
+                    # Handle both PIL Images and numpy arrays
+                    if hasattr(img, 'convert'):  # It's a PIL Image
+                        image = img
+                    elif hasattr(img, 'shape'):  # It's a numpy array
+                        image = Image.fromarray(img)
+                    else:
+                        logger.warning(f"[{module_name}] Skipping unsupported image type: {type(img)}")
+                        continue
+
+                    buffered = BytesIO()
+                    image.save(buffered, format="PNG")
+                    image_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+
+                    image_contents.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}
+                    })
+                except Exception as e:
+                    logger.warning(f"[{module_name}] Failed to encode image: {e}. Skipping this image.")
+                    continue
+
+            if not image_contents:
+                logger.error(f"[{module_name}] No valid images to process. Falling back to text-only query.")
+                return self.get_text_query(text, module_name)
+
+            # Build message: text first, then all images
+            content = [{"type": "text", "text": text}] + image_contents
+            messages = [{"role": "user", "content": content}]
+
+            # Log the prompt
+            prompt_preview = text[:2000] + "..." if len(text) > 2000 else text
+            logger.info(f"[{module_name}] OLLAMA VLM MULTI-IMAGE QUERY (images={len(image_contents)}):")
+            logger.info(f"[{module_name}] PROMPT: {prompt_preview}")
+
+            # Make the API call
+            response = self._call_completion(messages)
+            result = response.choices[0].message.content
+            duration = time.time() - start_time
+
+            # Log the interaction
+            log_llm_interaction(
+                interaction_type=f"ollama_{module_name}",
+                prompt=text,
+                response=result,
+                duration=duration,
+                metadata={
+                    "model": self.model_name,
+                    "backend": "ollama",
+                    "has_image": True,
+                    "image_count": len(image_contents)
+                },
+                model_info={"model": self.model_name, "backend": "ollama"}
+            )
+
+            # Log the response
+            result_preview = result[:1000] + "..." if len(result) > 1000 else result
+            logger.info(f"[{module_name}] RESPONSE: {result_preview}")
+            logger.info(f"[{module_name}] ---")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"[{module_name}] Error in Ollama multi-image query: {e}")
+            # Fallback to single image
+            if len(images) > 0:
+                logger.info(f"[{module_name}] Falling back to single image query")
+                try:
+                    return self.get_query(images[0], text, module_name)
+                except Exception as fallback_error:
+                    logger.error(f"[{module_name}] Single image fallback also failed: {fallback_error}")
+            # Final fallback to text-only
+            logger.info(f"[{module_name}] Falling back to text-only query")
+            return self.get_text_query(text, module_name)
+
     def get_text_query(self, text: str, module_name: str = "Unknown") -> str:
         """Process a text-only prompt using legacy Ollama backend"""
         messages = [{
             "role": "user",
             "content": [{"type": "text", "text": text}]
         }]
-        
+
         # Log the prompt
         prompt_preview = text[:2000] + "..." if len(text) > 2000 else text
         logger.info(f"[{module_name}] OLLAMA VLM TEXT QUERY:")
         logger.info(f"[{module_name}] PROMPT: {prompt_preview}")
-        
+
         response = self._call_completion(messages)
         result = response.choices[0].message.content
-        
+
         # Log the response
         result_preview = result[:1000] + "..." if len(result) > 1000 else result
         logger.info(f"[{module_name}] RESPONSE: {result_preview}")
         logger.info(f"[{module_name}] ---")
-        
+
         return result
 
 class LMStudioBackend(VLMBackend):
@@ -518,7 +920,7 @@ class LMStudioBackend(VLMBackend):
         self.requests = requests
 
         # Configuration for faster responses
-        self.max_tokens = kwargs.get('max_tokens', 2048)  # Shorter responses by default
+        self.max_tokens = kwargs.get('max_tokens', 5000)  # Shorter responses by default
         self.timeout = kwargs.get('timeout', 120)  # 2 minute timeout
         self.temperature = kwargs.get('temperature', 0.7)  # Lower for more focused responses
         self.cooldown = kwargs.get('cooldown', 15.0)  # Cooldown period in seconds after each call
@@ -721,6 +1123,145 @@ class LMStudioBackend(VLMBackend):
             logger.error(f"LM Studio API error: {e}")
             raise
 
+    def get_query_multi_image(
+        self,
+        images: List[Union[Image.Image, np.ndarray]],
+        text: str,
+        module_name: str = "Unknown"
+    ) -> str:
+        """Process multiple images with a text prompt using LM Studio API
+
+        Args:
+            images: List of images (PIL Images or numpy arrays)
+            text: Text prompt to send with the images
+            module_name: Name of the module making the request (for logging)
+
+        Returns:
+            The model's text response
+
+        Note:
+            LM Studio uses OpenAI-compatible API format with base64 images.
+            Respects cooldown mechanism to avoid overwhelming local model.
+        """
+        # Apply cooldown before making request
+        print(f"[LM STUDIO MULTI] About to apply cooldown (target={self.cooldown}s)...")
+        self._apply_cooldown()
+        print(f"[LM STUDIO MULTI] Cooldown complete, proceeding with multi-image request")
+
+        start_time = time.time()
+
+        try:
+            # Convert all images to base64
+            image_contents = []
+            for img in images:
+                try:
+                    base64_image = self._encode_image_to_base64(img)
+                    image_contents.append({
+                        "type": "image_url",
+                        "image_url": {"url": base64_image}
+                    })
+                except Exception as e:
+                    logger.warning(f"[{module_name}] Failed to encode image: {e}. Skipping this image.")
+                    continue
+
+            if not image_contents:
+                logger.error(f"[{module_name}] No valid images to process. Falling back to text-only query.")
+                return self.get_text_query(text, module_name)
+
+            # Build message: text first, then all images
+            content = [{"type": "text", "text": text}] + image_contents
+
+            payload = {
+                "model": self.model_name,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": content
+                    }
+                ],
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "top_k": self.top_k,
+                "seed": self.seed,
+                "greedy": self.greedy,
+                "repetition_penalty": self.repetition_penalty,
+                "presence_penalty": self.presence_penalty,
+                "out_seq_length": self.out_seq_length,
+                "stream": False
+            }
+
+            # Log the prompt
+            prompt_preview = text[:2000] + "..." if len(text) > 2000 else text
+            logger.info(f"[{module_name}] LM STUDIO VLM MULTI-IMAGE QUERY (images={len(image_contents)}):")
+            logger.info(f"[{module_name}] PROMPT: {prompt_preview}")
+
+            response_json = self._call_completion(payload)
+            result = response_json['choices'][0]['message']['content']
+            duration = time.time() - start_time
+
+            # Update last call time AFTER successful request completes
+            self._update_last_call_time()
+
+            # Extract token usage if available
+            token_usage = {}
+            if 'usage' in response_json:
+                usage = response_json['usage']
+                token_usage = {
+                    "prompt_tokens": usage.get('prompt_tokens', 0),
+                    "completion_tokens": usage.get('completion_tokens', 0),
+                    "total_tokens": usage.get('total_tokens', 0)
+                }
+
+            # Log the interaction
+            log_llm_interaction(
+                interaction_type=f"lmstudio_{module_name}",
+                prompt=text,
+                response=result,
+                duration=duration,
+                metadata={
+                    "model": self.model_name,
+                    "backend": "lmstudio",
+                    "has_image": True,
+                    "image_count": len(image_contents),
+                    "token_usage": token_usage
+                },
+                model_info={"model": self.model_name, "backend": "lmstudio"}
+            )
+
+            # Log the response
+            result_preview = result[:1000] + "..." if len(result) > 1000 else result
+            logger.info(f"[{module_name}] RESPONSE: {result_preview}")
+            logger.info(f"[{module_name}] ---")
+
+            return result
+
+        except Exception as e:
+            duration = time.time() - start_time
+
+            # Update last call time even on error to enforce cooldown
+            self._update_last_call_time()
+
+            # Fallback to single image
+            if len(images) > 0:
+                logger.info(f"[{module_name}] Falling back to single image query")
+                try:
+                    return self.get_query(images[0], text, module_name)
+                except Exception as fallback_error:
+                    logger.error(f"[{module_name}] Single image fallback also failed: {fallback_error}")
+
+            log_llm_error(
+                interaction_type=f"lmstudio_{module_name}",
+                prompt=text,
+                error=str(e),
+                metadata={"model": self.model_name, "backend": "lmstudio", "duration": duration, "has_image": True, "image_count": len(images)}
+            )
+            logger.error(f"LM Studio multi-image API error: {e}")
+
+            # Final fallback to text-only
+            logger.info(f"[{module_name}] Falling back to text-only query")
+            return self.get_text_query(text, module_name)
+
     def get_text_query(self, text: str, module_name: str = "Unknown") -> str:
         """Process a text-only prompt using LM Studio API"""
         # Apply cooldown before making request
@@ -897,6 +1438,103 @@ class VertexBackend(VLMBackend):
                 logger.error(f"[{module_name}] Text-only fallback also failed: {fallback_error}")
                 raise e
     
+    def get_query_multi_image(
+        self,
+        images: List[Union[Image.Image, np.ndarray]],
+        text: str,
+        module_name: str = "Unknown"
+    ) -> str:
+        """Process multiple images with a text prompt using Vertex AI Gemini API
+
+        Args:
+            images: List of images (PIL Images or numpy arrays)
+            text: Text prompt to send with the images
+            module_name: Name of the module making the request (for logging)
+
+        Returns:
+            The model's text response
+
+        Note:
+            Vertex AI uses Google's genai SDK which natively supports multiple images.
+            Images can be passed directly as PIL Images in the content_parts list.
+        """
+        start_time = time.time()
+
+        try:
+            # Convert all images to PIL format
+            pil_images = []
+            for img in images:
+                try:
+                    prepared_img = self._prepare_image(img)
+                    pil_images.append(prepared_img)
+                except Exception as e:
+                    logger.warning(f"[{module_name}] Failed to prepare image: {e}. Skipping this image.")
+                    continue
+
+            if not pil_images:
+                logger.error(f"[{module_name}] No valid images to process. Falling back to text-only query.")
+                return self.get_text_query(text, module_name)
+
+            # Build content_parts: [text, image1, image2, ...]
+            # Vertex Gemini accepts images directly as PIL Image objects
+            content_parts = [text] + pil_images
+
+            # Log the prompt
+            prompt_preview = text[:2000] + "..." if len(text) > 2000 else text
+            logger.info(f"[{module_name}] VERTEX GEMINI VLM MULTI-IMAGE QUERY (images={len(pil_images)}):")
+            logger.info(f"[{module_name}] PROMPT: {prompt_preview}")
+
+            # Generate response
+            response = self._call_generate_content(content_parts)
+
+            # Check for safety filter or content policy issues
+            if hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'finish_reason') and candidate.finish_reason == 12:
+                    logger.warning(f"[{module_name}] Gemini safety filter triggered (finish_reason=12). Trying single image fallback.")
+                    # Fallback to single image
+                    if len(pil_images) > 0:
+                        return self.get_query(pil_images[0], text, module_name)
+                    return self.get_text_query(text, module_name)
+
+            result = response.text
+            duration = time.time() - start_time
+
+            # Log the interaction
+            log_llm_interaction(
+                interaction_type=f"vertex_{module_name}",
+                prompt=text,
+                response=result,
+                duration=duration,
+                metadata={
+                    "model": self.model_name,
+                    "backend": "vertex",
+                    "has_image": True,
+                    "image_count": len(pil_images)
+                },
+                model_info={"model": self.model_name, "backend": "vertex"}
+            )
+
+            # Log the response
+            result_preview = result[:1000] + "..." if len(result) > 1000 else result
+            logger.info(f"[{module_name}] RESPONSE: {result_preview}")
+            logger.info(f"[{module_name}] ---")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"[{module_name}] Error in Vertex multi-image query: {e}")
+            # Fallback to single image
+            if len(images) > 0:
+                logger.info(f"[{module_name}] Falling back to single image query")
+                try:
+                    return self.get_query(images[0], text, module_name)
+                except Exception as fallback_error:
+                    logger.error(f"[{module_name}] Single image fallback also failed: {fallback_error}")
+            # Final fallback to text-only
+            logger.info(f"[{module_name}] Falling back to text-only query")
+            return self.get_text_query(text, module_name)
+
     def get_text_query(self, text: str, module_name: str = "Unknown") -> str:
         """Process a text-only prompt using Gemini API"""
         try:
@@ -905,19 +1543,19 @@ class VertexBackend(VLMBackend):
             prompt_preview = text[:2000] + "..." if len(text) > 2000 else text
             logger.info(f"[{module_name}] GEMINI VLM TEXT QUERY:")
             logger.info(f"[{module_name}] PROMPT: {prompt_preview}")
-            
+
             # Generate response
             response = self._call_generate_content([text])
-            
+
             # Check for safety filter or content policy issues
             if hasattr(response, 'candidates') and response.candidates:
                 candidate = response.candidates[0]
                 if hasattr(candidate, 'finish_reason') and candidate.finish_reason == 12:
                     logger.warning(f"[{module_name}] Gemini safety filter triggered (finish_reason=12). Returning default response.")
                     return "I cannot analyze this content due to safety restrictions. I'll proceed with a basic action: press 'A' to continue."
-            
+
             result = response.text
-            
+
             # Log the interaction
             duration = time.time() - start_time
             log_llm_interaction(
@@ -1050,6 +1688,114 @@ class GeminiBackend(VLMBackend):
                 logger.error(f"[{module_name}] Text-only fallback also failed: {fallback_error}")
                 raise e
     
+    def get_query_multi_image(
+        self,
+        images: List[Union[Image.Image, np.ndarray]],
+        text: str,
+        module_name: str = "Unknown"
+    ) -> str:
+        """Process multiple images with a text prompt using Gemini API
+
+        Args:
+            images: List of images (PIL Images or numpy arrays)
+            text: Text prompt to send with the images
+            module_name: Name of the module making the request (for logging)
+
+        Returns:
+            The model's text response
+
+        Note:
+            Gemini natively supports multiple images in a single request.
+            Images can be passed directly as PIL Images in the content_parts list.
+        """
+        start_time = time.time()
+
+        try:
+            # Convert all images to PIL format
+            pil_images = []
+            for img in images:
+                try:
+                    prepared_img = self._prepare_image(img)
+                    pil_images.append(prepared_img)
+                except Exception as e:
+                    logger.warning(f"[{module_name}] Failed to prepare image: {e}. Skipping this image.")
+                    continue
+
+            if not pil_images:
+                logger.error(f"[{module_name}] No valid images to process. Falling back to text-only query.")
+                return self.get_text_query(text, module_name)
+
+            # Build content_parts: [text, image1, image2, ...]
+            # Gemini accepts images directly as PIL Image objects
+            content_parts = [text] + pil_images
+
+            # Log the prompt
+            prompt_preview = text[:2000] + "..." if len(text) > 2000 else text
+            logger.info(f"[{module_name}] GEMINI VLM MULTI-IMAGE QUERY (images={len(pil_images)}):")
+            logger.info(f"[{module_name}] PROMPT: {prompt_preview}")
+
+            # Generate response
+            response = self._call_generate_content(content_parts)
+
+            # Check for safety filter or content policy issues
+            if hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'finish_reason') and candidate.finish_reason == 12:
+                    logger.warning(f"[{module_name}] Gemini safety filter triggered (finish_reason=12). Trying single image fallback.")
+                    # Fallback to single image
+                    if len(pil_images) > 0:
+                        return self.get_query(pil_images[0], text, module_name)
+                    return self.get_text_query(text, module_name)
+
+            result = response.text
+            duration = time.time() - start_time
+
+            # Extract token usage if available
+            token_usage = {}
+            if hasattr(response, 'usage_metadata'):
+                usage = response.usage_metadata
+                token_usage = {
+                    "prompt_tokens": getattr(usage, 'prompt_token_count', 0),
+                    "completion_tokens": getattr(usage, 'candidates_token_count', 0),
+                    "total_tokens": getattr(usage, 'total_token_count', 0)
+                }
+
+            # Log the interaction
+            log_llm_interaction(
+                interaction_type=f"gemini_{module_name}",
+                prompt=text,
+                response=result,
+                duration=duration,
+                metadata={
+                    "model": self.model_name,
+                    "backend": "gemini",
+                    "has_image": True,
+                    "image_count": len(pil_images),
+                    "token_usage": token_usage
+                },
+                model_info={"model": self.model_name, "backend": "gemini"}
+            )
+
+            # Log the response
+            result_preview = result[:1000] + "..." if len(result) > 1000 else result
+            logger.info(f"[{module_name}] RESPONSE: {result_preview}")
+            logger.info(f"[{module_name}] ---")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"[{module_name}] Error in Gemini multi-image query: {e}")
+            # Fallback to single image
+            if len(images) > 0:
+                logger.info(f"[{module_name}] Falling back to single image query")
+                try:
+                    return self.get_query(images[0], text, module_name)
+                except Exception as fallback_error:
+                    logger.error(f"[{module_name}] Single image fallback also failed: {fallback_error}")
+            # Final fallback to text-only
+            logger.info(f"[{module_name}] Falling back to text-only query")
+            return self.get_text_query(text, module_name)
+
     def get_text_query(self, text: str, module_name: str = "Unknown") -> str:
         """Process a text-only prompt using Gemini API"""
         start_time = time.time()

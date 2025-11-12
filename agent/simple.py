@@ -51,6 +51,7 @@ from utils.history_compressor import HistoryCompressor
 from utils.performance_metrics import PerformanceMetrics
 from utils.model_optimizer import ModelOptimizer
 from utils.collision_handler import get_collision_handler
+from utils.knowledge_manager import KnowledgeManager
 from agent.prompt_templates import get_compact_prompt, get_full_prompt
 
 logger = logging.getLogger(__name__)
@@ -235,12 +236,38 @@ class SimpleAgent:
         self.collision_handler = get_collision_handler()
         logger.info("Collision handler initialized (5 collision limit, 2 movement reset)")
 
+        # Knowledge Manager (Phase 5 - Knowledge Base Integration)
+        # Provides walkthrough guidance and map images for VLM context
+        try:
+            self.knowledge_manager = KnowledgeManager(
+                knowledge_file="data/knowledge/speedrun.md",
+                maps_directory="data/knowledge"
+            )
+            # Preload map resources for faster access
+            self.knowledge_manager.preload_resources()
+            stats = self.knowledge_manager.get_stats()
+            logger.info(
+                f"Knowledge Manager initialized: {stats['knowledge_sections']} sections, "
+                f"{stats['total_maps']} maps, {stats['total_trainers']} trainers"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to initialize Knowledge Manager: {e}. Continuing without knowledge base.")
+            self.knowledge_manager = None
+
         # Track last battle state for recording outcomes
         self.last_battle_state = None
         self.current_battle_turn = 0
 
         # Initialize storyline objectives for Emerald progression
         self._initialize_storyline_objectives()
+
+    def _get_current_milestone_id(self) -> Optional[str]:
+        """Get the milestone ID of the current active storyline objective"""
+        active_objs = self.get_active_objectives()
+        for obj in active_objs:
+            if obj.storyline and obj.milestone_id:
+                return obj.milestone_id
+        return None
 
     def _initialize_storyline_objectives(self):
         """Initialize the main storyline objectives for Pokémon Emerald progression"""
@@ -1897,6 +1924,48 @@ EXAMPLE - DO THIS INSTEAD:
             # Apply model-specific optimizations (Phase 3.3)
             prompt = self.model_optimizer.optimize_prompt(prompt, context)
 
+            # Phase 5: Get knowledge base guidance and map image
+            knowledge_text = ""
+            overview_map = None
+            if self.knowledge_manager:
+                try:
+                    # Get current milestone and location
+                    current_milestone = self._get_current_milestone_id()
+                    current_location = game_state.get('player', {}).get('location', '')
+
+                    logger.info(f"📚 Retrieving knowledge for milestone={current_milestone}, location={current_location}, context={context}")
+
+                    # Get formatted knowledge text for prompt
+                    knowledge_text = self.knowledge_manager.format_knowledge_for_prompt(
+                        milestone_id=current_milestone or "",
+                        location=current_location,
+                        context=context,
+                        include_full_details=(context != "title")  # Compact for title, full for gameplay
+                    )
+
+                    # Get overview map image (resized for token optimization)
+                    overview_map = self.knowledge_manager.get_map_image(
+                        milestone_id=current_milestone or "",
+                        location=current_location,
+                        max_size=400  # Resize to 400px max dimension for token efficiency
+                    )
+
+                    if knowledge_text:
+                        logger.info(f"📚 Retrieved knowledge: {len(knowledge_text)} chars")
+                    if overview_map:
+                        logger.info(f"🗺️ Retrieved map: {overview_map.size[0]}x{overview_map.size[1]}px")
+
+                except Exception as e:
+                    logger.warning(f"Failed to retrieve knowledge/map: {e}")
+                    knowledge_text = ""
+                    overview_map = None
+
+            # Inject knowledge text into prompt if available
+            if knowledge_text:
+                # Add knowledge section at the beginning of the prompt (high priority context)
+                prompt = f"{knowledge_text}\n\n{'='*80}\n\n{prompt}"
+                logger.info("📚 Knowledge text injected into prompt")
+
             # Print complete prompt to terminal for debugging
             print("\n" + "=" * 120)
             print("🤖 SIMPLE AGENT PROMPT SENT TO VLM:")
@@ -1920,7 +1989,19 @@ EXAMPLE - DO THIS INSTEAD:
                     import time
                     vlm_start_time = time.time()
 
-                    response = self.vlm.get_query(frame, prompt, "simple_mode")
+                    # Phase 5: Use multi-image if we have an overview map
+                    if overview_map and hasattr(self.vlm, 'get_query_multi_image'):
+                        logger.info("🎯 Using multi-image VLM call (game frame + overview map)")
+                        response = self.vlm.get_query_multi_image(
+                            images=[frame, overview_map],
+                            text=prompt,
+                            module_name="simple_mode"
+                        )
+                    else:
+                        # Fallback to single image (game frame only)
+                        if overview_map:
+                            logger.warning("⚠️ VLM backend doesn't support multi-image, using single image only")
+                        response = self.vlm.get_query(frame, prompt, "simple_mode")
 
                     vlm_duration = time.time() - vlm_start_time
                     self.performance_metrics.log_vlm_call(vlm_duration)
