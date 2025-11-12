@@ -142,8 +142,8 @@ def main():
                        help="Max tokens for LM Studio responses (default: 500, lower = faster)")
     parser.add_argument("--lmstudio-timeout", type=int, default=60,
                        help="Timeout in seconds for LM Studio API calls (default: 60)")
-    parser.add_argument("--lmstudio-cooldown", type=float, default=10.0,
-                       help="Cooldown in seconds between LM Studio API calls (default: 10.0)")
+    parser.add_argument("--lmstudio-cooldown", type=float, default=15.0,
+                       help="Cooldown in seconds between LM Studio API calls (default: 15.0)")
     parser.add_argument("--scaffold", type=str, default="simple",
                        choices=["simple", "react"],
                        help="Agent scaffold: simple (default) or react")

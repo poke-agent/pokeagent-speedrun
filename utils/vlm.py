@@ -521,7 +521,7 @@ class LMStudioBackend(VLMBackend):
         self.max_tokens = kwargs.get('max_tokens', 2048)  # Shorter responses by default
         self.timeout = kwargs.get('timeout', 120)  # 2 minute timeout
         self.temperature = kwargs.get('temperature', 0.7)  # Lower for more focused responses
-        self.cooldown = kwargs.get('cooldown', 10.0)  # Cooldown period in seconds after each call
+        self.cooldown = kwargs.get('cooldown', 15.0)  # Cooldown period in seconds after each call
         self.top_p = kwargs.get('top_p', 0.8)
         self.top_k = kwargs.get('top_k', 20)
         self.seed = kwargs.get('seed', 3407)

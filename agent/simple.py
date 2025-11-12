@@ -44,6 +44,13 @@ from PIL import Image
 from utils.agent_helpers import update_server_metrics
 from utils.pathfinding import Pathfinder
 from utils.state_formatter import format_state_for_llm
+from utils.battle_analyzer import BattleAnalyzer
+from utils.strategic_memory import StrategicMemory
+from utils.speedrun_router import SpeedrunRouter
+from utils.history_compressor import HistoryCompressor
+from utils.performance_metrics import PerformanceMetrics
+from utils.model_optimizer import ModelOptimizer
+from agent.prompt_templates import get_compact_prompt, get_full_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +195,40 @@ class SimpleAgent:
         self.last_detected_frontiers = []  # Cache last detected frontiers for frontier navigation
         self.consecutive_collisions = 0  # Track collisions for frontier abandonment
         self.consecutive_movements = 0  # Track successful movements
+
+        # Frame similarity detection (Phase 1.1 optimization)
+        self.last_frame = None
+        self.last_frame_hash = None
+        self.frame_skip_count = 0  # Track how many frames we've skipped
+        self.last_vlm_action = None  # Remember last action when skipping frames
+
+        # Battle analyzer (Phase 1.3 optimization)
+        self.battle_analyzer = BattleAnalyzer()
+
+        # Strategic memory system (Phase 2.1 optimization)
+        self.strategic_memory = StrategicMemory()
+
+        # Speedrun router (Phase 2.2 optimization)
+        self.speedrun_router = SpeedrunRouter()
+
+        # History compressor (Phase 3.1 optimization)
+        self.history_compressor = HistoryCompressor(
+            full_detail_count=history_display_count,
+            summary_batch_size=10
+        )
+
+        # Performance metrics (Phase 3.2 optimization)
+        self.performance_metrics = PerformanceMetrics()
+
+        # Model optimizer (Phase 3.3 optimization)
+        # Detect model name from VLM backend and optimize prompts accordingly
+        model_name = getattr(vlm, 'model_name', 'gemini-2.5-flash')  # Default to Gemini Flash
+        self.model_optimizer = ModelOptimizer(model_name)
+        logger.info(f"Model optimizer settings:\n{self.model_optimizer.format_settings_for_display()}")
+
+        # Track last battle state for recording outcomes
+        self.last_battle_state = None
+        self.current_battle_turn = 0
 
         # Initialize storyline objectives for Emerald progression
         self._initialize_storyline_objectives()
@@ -851,10 +892,53 @@ class SimpleAgent:
                     self.state.objectives_updated = True
                     completed_ids.append(obj.id)
                     logger.info(
-                        f"Auto-completed storyline objective via milestone {obj.milestone_id}: {obj.description}"
+                        f"✅ Auto-completed storyline objective via milestone {obj.milestone_id}: {obj.description}"
                     )
 
+                    # Performance metrics: Log milestone completion (Phase 3.2)
+                    self.performance_metrics.log_milestone(obj.milestone_id)
+
+                    # Auto-save checkpoint when milestone is reached
+                    self._save_milestone_checkpoint(obj.milestone_id, game_state)
+
         return completed_ids
+
+    def _save_milestone_checkpoint(self, milestone_id: str, game_state: Dict[str, Any]):
+        """Save an automatic checkpoint when a milestone is completed"""
+        try:
+            import os
+            import requests
+            from datetime import datetime
+
+            # Create checkpoints directory if it doesn't exist
+            checkpoints_dir = "checkpoints/milestones"
+            os.makedirs(checkpoints_dir, exist_ok=True)
+
+            # Generate filename: milestone_YYYYMMDD_HHMMSS.state
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{milestone_id}_{timestamp}.state"
+            filepath = os.path.join(checkpoints_dir, filename)
+
+            # Request server to save state via API
+            server_url = os.getenv('SERVER_URL', 'http://localhost:8000')
+
+            try:
+                response = requests.post(
+                    f"{server_url}/save_state",
+                    json={"filepath": filepath},
+                    timeout=10
+                )
+
+                if response.status_code == 200:
+                    logger.info(f"💾 Milestone checkpoint saved: {filepath}")
+                else:
+                    logger.warning(f"⚠️  Failed to save milestone checkpoint: HTTP {response.status_code}")
+
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"⚠️  Cannot save milestone checkpoint: server not reachable ({e})")
+
+        except Exception as e:
+            logger.error(f"Failed to save milestone checkpoint for {milestone_id}: {e}")
 
     def detect_stuck_pattern(
         self, coords: Optional[Tuple[int, int]], context: str, game_state: Dict[str, Any] = None
@@ -938,23 +1022,80 @@ class SimpleAgent:
             logger.warning(f"Error checking for black frame: {e}")
             return False  # On error, assume not black to continue processing
 
+    def is_frame_similar(self, frame, similarity_threshold: float = 0.95) -> bool:
+        """
+        Check if current frame is very similar to the last frame.
+        Uses perceptual hashing for fast comparison.
+
+        Args:
+            frame: Current frame (PIL Image or numpy array)
+            similarity_threshold: Threshold for considering frames similar (0.0-1.0)
+
+        Returns:
+            bool: True if frame is similar enough to skip VLM processing
+        """
+        try:
+            # Convert to PIL Image if needed
+            if hasattr(frame, "convert"):  # It's already a PIL Image
+                img = frame
+            elif hasattr(frame, "shape"):  # It's a numpy array
+                img = Image.fromarray(frame)
+            else:
+                return False  # Unknown type, can't compare
+
+            # No previous frame to compare against
+            if self.last_frame is None:
+                self.last_frame = img
+                return False
+
+            # Quick numpy-based comparison (faster than perceptual hash)
+            # Convert both to numpy arrays
+            current_array = np.array(img)
+            last_array = np.array(self.last_frame)
+
+            # Check if shapes match
+            if current_array.shape != last_array.shape:
+                self.last_frame = img
+                return False
+
+            # Calculate pixel-wise difference
+            # For GBA (240x160), this is very fast
+            diff = np.abs(current_array.astype(float) - last_array.astype(float))
+            mean_diff = np.mean(diff)
+            max_diff = np.max(diff)
+
+            # Frames are similar if:
+            # 1. Mean difference is very small (< 5 out of 255)
+            # 2. Max difference is not too large (< 50 out of 255)
+            # This catches small animations but detects actual scene changes
+            is_similar = mean_diff < 5 and max_diff < 50
+
+            if is_similar:
+                logger.debug(f"Similar frame detected: mean_diff={mean_diff:.2f}, max_diff={max_diff:.2f}")
+                self.frame_skip_count += 1
+            else:
+                # Frame changed significantly, reset skip count
+                self.frame_skip_count = 0
+                self.last_frame = img
+
+            return is_similar
+
+        except Exception as e:
+            logger.warning(f"Error checking frame similarity: {e}")
+            return False  # On error, assume not similar to continue processing
+
     def get_relevant_history_summary(self, current_context: str, coords: Optional[Tuple[int, int]]) -> str:
-        """Get a concise summary of relevant recent history"""
+        """Get a concise summary of relevant recent history (Phase 3.1 - with compression)"""
         # current_context and coords could be used for more sophisticated filtering in the future
         _ = current_context, coords  # Acknowledge unused parameters for now
         if not self.state.history:
             return "No previous history."
 
-        # Get last N entries based on display count
-        recent_entries = list(self.state.history)[-self.history_display_count :]
+        # Use history compressor for efficient formatting (Phase 3.1)
+        all_entries = list(self.state.history)
+        compressed = self.history_compressor.compress_history(all_entries)
 
-        # Format for LLM consumption
-        summary_lines = []
-        for i, entry in enumerate(recent_entries, 1):
-            coord_str = f"({entry.player_coords[0]},{entry.player_coords[1]})" if entry.player_coords else "(?)"
-            summary_lines.append(f"{i}. {entry.context} at {coord_str}: {entry.action_taken}")
-
-        return "\n".join(summary_lines)
+        return compressed
 
     def get_stuck_warning(
         self, coords: Optional[Tuple[int, int]], context: str, game_state: Dict[str, Any] = None
@@ -1152,6 +1293,32 @@ class SimpleAgent:
             logger.info("⏳ Black frame detected (likely a transition), waiting for next frame...")
             return "WAIT"  # Return WAIT to skip this frame and wait for the next one
 
+        # OPTIMIZATION: Check for similar frame (Phase 1.1)
+        # Skip VLM processing if frame hasn't changed significantly
+        # BUT: Only skip if we're not in a critical context (battle, dialogue)
+        # AND: Only skip up to 2 frames max to avoid missing important changes
+        if context not in ["battle", "dialogue", "title"] and self.frame_skip_count < 2:
+            if self.is_frame_similar(frame):
+                # Frame is very similar to last one, reuse last action
+                if self.last_vlm_action:
+                    logger.info(
+                        f"⚡ Frame skip optimization: Reusing last action '{self.last_vlm_action}' "
+                        f"(skip count: {self.frame_skip_count})"
+                    )
+                    # Performance metrics: Log frame skip (Phase 3.2)
+                    self.performance_metrics.log_frame_skip()
+
+                    # Add to recent actions for tracking
+                    self.state.recent_actions.append(self.last_vlm_action)
+                    return self.last_vlm_action
+                else:
+                    # No previous action to reuse, proceed with VLM
+                    logger.debug("Similar frame but no previous action, proceeding with VLM")
+        else:
+            # Reset frame skip tracking when in critical contexts
+            if context in ["battle", "dialogue", "title"]:
+                self.frame_skip_count = 0
+
         try:
             # Increment step counter
             self.state.step_counter += 1
@@ -1160,6 +1327,17 @@ class SimpleAgent:
             coords = self.get_player_coords(game_state)
             context = self.get_game_context(game_state)
             map_id = self.get_map_id(game_state)
+
+            # Performance metrics: Track battle state transitions (Phase 3.2)
+            if context == "battle" and self.last_battle_state != "battle":
+                # Battle just started
+                self.performance_metrics.log_battle_start()
+                logger.info("📊 Battle started - tracking battle metrics")
+            elif context != "battle" and self.last_battle_state == "battle":
+                # Battle just ended - try to determine outcome
+                # For now, we can't determine win/loss without more info, but we log the transition
+                logger.info("📊 Battle ended - no outcome tracking yet (needs enhancement)")
+            self.last_battle_state = context
 
             # CRITICAL: Clean stale dialogue from game_state before formatting for VLM
             # If context is "overworld", it means dialogue is stale/residual
@@ -1176,6 +1354,26 @@ class SimpleAgent:
             movement_memory = ""
             if coords:
                 movement_memory = self.get_area_movement_memory(coords)
+
+            # Get strategic memory for current location (Phase 2.1)
+            strategic_memory_text = ""
+            try:
+                current_location = game_state.get('player', {}).get('location', '')
+                strategic_memory_text = self.strategic_memory.format_memory_for_prompt(current_location)
+            except Exception as e:
+                logger.warning(f"Failed to format strategic memory: {e}")
+
+            # Get speedrun progress (Phase 2.2)
+            speedrun_progress_text = ""
+            try:
+                # Get current milestones from game state
+                milestones = game_state.get('milestones', {})
+                speedrun_progress_text = self.speedrun_router.format_progress_for_prompt(
+                    current_milestones=milestones,
+                    current_actions=self.state.step_counter
+                )
+            except Exception as e:
+                logger.warning(f"Failed to format speedrun progress: {e}")
 
             # Check for objective completion first
             self.check_objective_completion(game_state)
@@ -1194,22 +1392,32 @@ class SimpleAgent:
                     self.navigation_path = None  # Clear so we recalculate after dialogue
 
             # AUTO-NAVIGATION: Check if we have an active navigation path
-            nav_action = self.get_next_navigation_action(game_state)
-            if nav_action:
-                logger.info(f"🧭 Auto-navigation: {nav_action} toward {self.navigation_target}")
-                # Add navigation action to history for tracking
-                self.state.recent_actions.append(nav_action)
-                # Add to history entry
-                history_entry = HistoryEntry(
-                    timestamp=datetime.now(),
-                    player_coords=coords,
-                    map_id=map_id,
-                    context=context,
-                    action_taken=nav_action,
-                    game_state_summary=f"Auto-navigation: {nav_action} toward {self.navigation_target}",
-                )
-                self.state.history.append(history_entry)
-                return nav_action
+            # BUT skip auto-navigation in special locations (MOVING_VAN, INTRO)
+            location = game_state.get('player', {}).get('location', '')
+            if location in ['MOVING_VAN', 'INTRO']:
+                # Cancel any active navigation in special locations
+                if self.navigation_path or self.navigation_target:
+                    logger.info(f"🚫 Cancelling auto-navigation in special location: {location}")
+                    self.navigation_path = []
+                    self.navigation_target = None
+            else:
+                # Normal auto-navigation (outside special locations)
+                nav_action = self.get_next_navigation_action(game_state)
+                if nav_action:
+                    logger.info(f"🧭 Auto-navigation: {nav_action} toward {self.navigation_target}")
+                    # Add navigation action to history for tracking
+                    self.state.recent_actions.append(nav_action)
+                    # Add to history entry
+                    history_entry = HistoryEntry(
+                        timestamp=datetime.now(),
+                        player_coords=coords,
+                        map_id=map_id,
+                        context=context,
+                        action_taken=nav_action,
+                        game_state_summary=f"Auto-navigation: {nav_action} toward {self.navigation_target}",
+                    )
+                    self.state.history.append(history_entry)
+                    return nav_action
 
             # Get active objectives (needed for both navigation and LLM prompt)
             active_objectives = self.get_active_objectives()
@@ -1282,6 +1490,12 @@ class SimpleAgent:
                                         )
                                         break
 
+                            # Check if we're in special location where auto-navigation should be disabled
+                            location = game_state.get('player', {}).get('location', '')
+                            if location in ['MOVING_VAN', 'INTRO']:
+                                logger.info(f"🚫 Skipping auto-navigation in special location: {location} (will use VLM instead)")
+                                break  # Skip auto-navigation, let VLM handle it
+
                             # Check if we're in dialogue/menu context - don't auto-navigate during these
                             # UNLESS we're super stuck (same position 10+ steps)
                             if context not in ["dialogue", "menu", "battle"] or super_stuck:
@@ -1312,10 +1526,12 @@ class SimpleAgent:
             # Get relevant history and stuck detection
             history_summary = self.get_relevant_history_summary(context, coords)
             stuck_warning = self.get_stuck_warning(coords, context, game_state)
-            recent_actions_str = (
-                ", ".join(list(self.state.recent_actions)[-self.actions_display_count :])
-                if self.state.recent_actions
-                else "None"
+
+            # Compress recent actions (Phase 3.1)
+            recent_actions_list = list(self.state.recent_actions) if self.state.recent_actions else []
+            recent_actions_str = self.history_compressor.compress_action_list(
+                recent_actions_list,
+                max_display=self.actions_display_count
             )
 
             # Format objectives for LLM (active_objectives already retrieved above)
@@ -1368,8 +1584,65 @@ class SimpleAgent:
                     logger.warning(f"Frontier detection failed: {e}", exc_info=True)
                     frontier_suggestions = ""
 
+            # Generate battle analysis if in battle (Phase 1.3 optimization)
+            battle_analysis = ""
+            if context == "battle":
+                try:
+                    battle_info = game_data.get('battle_info', {})
+                    player_pokemon = battle_info.get('player_pokemon', {})
+                    opponent_pokemon = battle_info.get('opponent_pokemon', {})
+
+                    if player_pokemon and opponent_pokemon:
+                        # Get moves data
+                        moves = player_pokemon.get('moves', [])
+                        move_pp = player_pokemon.get('move_pp', [])
+
+                        # Build move data structures for battle analyzer
+                        available_moves = []
+                        for i, move_name in enumerate(moves):
+                            if move_name and move_name.strip():
+                                # Note: Move type and power would ideally come from game data
+                                # For now, battle analyzer will use move database
+                                available_moves.append({
+                                    'name': move_name,
+                                    'type': 'Normal',  # Placeholder - would need move database
+                                    'power': 50,  # Placeholder
+                                    'pp': move_pp[i] if i < len(move_pp) else 0
+                                })
+
+                        # Get party for switch analysis
+                        party = player_data.get('party', [])
+
+                        # Generate battle analysis
+                        battle_analysis = self.battle_analyzer.format_battle_analysis(
+                            player_pokemon,
+                            opponent_pokemon,
+                            available_moves,
+                            party
+                        )
+                        logger.info(f"Generated battle analysis:\n{battle_analysis}")
+                except Exception as e:
+                    logger.warning(f"Failed to generate battle analysis: {e}")
+                    battle_analysis = ""
+
             # Check if using local/compact mode for smaller models
             use_compact_prompt = os.getenv('COMPACT_PROMPT', 'false').lower() == 'true'
+
+            # Add special hint for MOVING_VAN intro
+            moving_van_hint = ""
+            try:
+                location = game_state.get('player', {}).get('location', '')
+                if location == 'MOVING_VAN':
+                    moving_van_hint = """
+⚠️ SPECIAL LOCATION HINT - MOVING VAN INTRO:
+You are in the moving van at the START of the game. To exit the van and begin the game:
+- Move RIGHT to reach the exit/door of the van
+- The map shows limited data during this cutscene - trust the visual frame
+- Do NOT get stuck moving UP/DOWN - you need to go RIGHT to exit
+- Once you exit RIGHT, the intro will complete and you'll be in your new house
+"""
+            except Exception:
+                pass
 
             # Build pathfinding rules section (only if not in title sequence)
             pathfinding_rules = ""
@@ -1411,99 +1684,42 @@ EXAMPLE - DO THIS INSTEAD:
 - NPCs can trigger battles or dialogue, which may be useful for objectives
 """
 
-            # Create prompt - use compact mode for local models or full mode for cloud
+            # Create prompt - use compact mode for local models or full mode for cloud (Phase 1.2)
             if use_compact_prompt:
                 # COMPACT MODE for local models (reduced token count)
-                prompt = f"""Pokemon Emerald agent. Choose next action based on game state.
-
-RECENT ACTIONS: {recent_actions_str}
-
-OBJECTIVES:
-{objectives_summary}
-
-{frontier_suggestions}
-
-GAME STATE:
-{formatted_state}
-
-{movement_memory}
-
-Actions: A, B, START, SELECT, UP, DOWN, LEFT, RIGHT
-
-Rules:
-- Dialogue: Press A to advance/close
-- Movement: Single steps preferred (UP/DOWN/LEFT/RIGHT)
-- Avoid walls (#) and failed movements
-- Check map before moving
-
-Response format:
-ACTION: [single action like 'RIGHT' or 'A']
-REASON: [brief explanation]
-
-Context: {context} | Coords: {coords}"""
+                prompt = get_compact_prompt(
+                    context=context,
+                    coords=coords,
+                    recent_actions=recent_actions_str,
+                    objectives=objectives_summary,
+                    formatted_state=formatted_state + "\n" + movement_memory
+                )
             else:
-                # FULL MODE for cloud models (detailed prompt)
-                prompt = f"""You are playing as the Protagonist in Pokemon Emerald. Progress quickly to the milestones by balancing exploration and exploitation of things you know, but have fun for the Twitch stream while you do it.
-            Based on the current game frame and state information, think through your next move and choose the best button action.
-            If you notice that you are repeating the same action sequences over and over again, you definitely need to try something different since what you are doing is wrong! Try exploring different new areas or interacting with different NPCs if you are stuck.
+                # FULL MODE for cloud models (context-aware detailed prompt)
+                # Combine movement memory, strategic memory, and speedrun progress
+                combined_memory = movement_memory
+                if strategic_memory_text:
+                    combined_memory += "\n\n" + strategic_memory_text if combined_memory else strategic_memory_text
+                if speedrun_progress_text:
+                    combined_memory += "\n\n" + speedrun_progress_text if combined_memory else speedrun_progress_text
 
-            IMPORTANT GAME MECHANICS:
-            - **NPC Dialogue Flow** (CRITICAL):
-              1. Press A ONCE to initiate dialogue with NPC (when facing them)
-              2. Press A to advance through dialogue lines (text may scroll or change)
-              3. Press A AGAIN when dialogue text is fully displayed to DISMISS/CLOSE the dialogue box
-            - **Sign/Object Reading**: Press A to read, then A again to close.
-            - **Menu Navigation**: B button BACKS OUT of menus. START opens the main menu.
-            - **Critical Rules**:
-              * Don't press the same button more than 13 times in a row
-              * If stuck pressing A repeatedly, try movement
+                prompt = get_full_prompt(
+                    context=context,
+                    coords=coords,
+                    recent_actions=recent_actions_str,
+                    history_summary=history_summary,
+                    objectives=objectives_summary,
+                    formatted_state=formatted_state,
+                    actions_count=self.actions_display_count,
+                    history_count=self.history_display_count,
+                    frontier_suggestions=frontier_suggestions if frontier_suggestions else "",
+                    battle_analysis=battle_analysis if battle_analysis else "",
+                    movement_memory=combined_memory if combined_memory else "",
+                    stuck_warning=stuck_warning if stuck_warning else ""
+                )
 
-
-RECENT ACTION HISTORY (last {self.actions_display_count} actions):
-{recent_actions_str}
-
-LOCATION/CONTEXT HISTORY (last {self.history_display_count} steps):
-{history_summary}
-
-CURRENT OBJECTIVES:
-{objectives_summary}
-
-{frontier_suggestions}
-
-CURRENT GAME STATE:
-{formatted_state}
-
-{movement_memory}
-
-{stuck_warning}
-
-Available actions: A, B, START, SELECT, UP, DOWN, LEFT, RIGHT
-
-IMPORTANT: Please think step by step before choosing your action. Structure your response like this:
-
-ANALYSIS:
-[Analyze what you see in the frame and current game state - what's happening? where are you? what should you be doing?
-IMPORTANT: Look carefully at the game image for objects (clocks, pokeballs, bags) and NPCs (people, trainers) that might not be shown on the map. NPCs appear as sprite characters and can block movement or trigger battles/dialogue. When you see them try determine their location (X,Y) on the map relative to the player and any objects.]
-
-OBJECTIVES:
-[Review your current objectives. You have main storyline objectives (story_*) that track overall Emerald progression - these are automatically verified and you CANNOT manually complete them.  There may be sub-objectives that you need to complete before the main milestone. You can create your own sub-objectives to help achieve the main goals. Do any need to be updated, added, or marked as complete?
-- Add sub-objectives: ADD_OBJECTIVE: type:description:target_value (e.g., "ADD_OBJECTIVE: location:Find Pokemon Center in town:(15,20)" or "ADD_OBJECTIVE: item:Buy Pokeballs:5")
-- Complete sub-objectives only: COMPLETE_OBJECTIVE: objective_id:notes (e.g., "COMPLETE_OBJECTIVE: my_sub_obj_123:Successfully bought Pokeballs")
-- NOTE: Do NOT try to complete storyline objectives (story_*) - they auto-complete when milestones are reached]
-
-PLAN:
-[Think about your immediate goal - what do you want to accomplish in the next few actions? Consider your current objectives and recent history.
-Check MOVEMENT MEMORY for areas you've had trouble with before and plan your route accordingly.]
-
-REASONING:
-[Explain why you're choosing this specific action. Reference the MOVEMENT PREVIEW and MOVEMENT MEMORY sections. Check the visual frame for NPCs before moving. If you see NPCs in the image, avoid walking into them. Consider any failed movements or known obstacles from your memory.]
-
-ACTION:
-[Your final action choice - PREFER SINGLE ACTIONS like 'RIGHT' or 'A'. Only use multiple actions like 'UP, UP, RIGHT' if you've verified each step is WALKABLE in the movement preview and map.]
-
-{pathfinding_rules}
-
-Context: {context} | Coords: {coords} """
+            # Apply model-specific optimizations (Phase 3.3)
+            prompt = self.model_optimizer.optimize_prompt(prompt, context)
 
             # Print complete prompt to terminal for debugging
             print("\n" + "=" * 120)
@@ -1524,7 +1740,15 @@ Context: {context} | Coords: {coords} """
             if frame and (hasattr(frame, "save") or hasattr(frame, "shape")):
                 print("🔍 Making VLM call...")
                 try:
+                    # Performance metrics: Track VLM call timing (Phase 3.2)
+                    import time
+                    vlm_start_time = time.time()
+
                     response = self.vlm.get_query(frame, prompt, "simple_mode")
+
+                    vlm_duration = time.time() - vlm_start_time
+                    self.performance_metrics.log_vlm_call(vlm_duration)
+
                     print(
                         f"🔍 VLM response received: {response[:100]}..."
                         if len(response) > 100
@@ -1604,6 +1828,20 @@ Context: {context} | Coords: {coords} """
 
             # Update server with agent step and metrics (for agent thinking display)
             update_server_metrics()
+
+            # Store last VLM action for frame skip optimization (Phase 1.1)
+            if isinstance(actions, list) and len(actions) > 0:
+                self.last_vlm_action = actions[0]  # Store first action of sequence
+            else:
+                self.last_vlm_action = actions
+
+            # Performance metrics: Log action taken (Phase 3.2)
+            action_str = str(actions) if isinstance(actions, str) else ', '.join(actions) if isinstance(actions, list) else str(actions)
+            self.performance_metrics.log_action(action_str, context, duration=0.0)
+
+            # Performance metrics: Take snapshot if needed (Phase 3.2)
+            current_location = game_state.get('player', {}).get('location', 'UNKNOWN')
+            self.performance_metrics.maybe_take_snapshot(current_location)
 
             return actions
 
@@ -2096,6 +2334,23 @@ Context: {context} | Coords: {coords} """
             self.state.failed_movements[coord_key].append(failed_entry)
             logger.info(f"Recorded failed movement: {coord_key} -> {direction} ({reason})")
 
+            # Also record in strategic memory for long-term learning (Phase 2.1)
+            # Calculate target coords based on direction
+            target_coords = coords
+            if direction == "UP":
+                target_coords = (coords[0], coords[1] - 1)
+            elif direction == "DOWN":
+                target_coords = (coords[0], coords[1] + 1)
+            elif direction == "LEFT":
+                target_coords = (coords[0] - 1, coords[1])
+            elif direction == "RIGHT":
+                target_coords = (coords[0] + 1, coords[1])
+
+            try:
+                self.strategic_memory.record_failed_path(coords, target_coords, reason)
+            except Exception as e:
+                logger.warning(f"Failed to record in strategic memory: {e}")
+
     def record_npc_interaction(self, coords: Tuple[int, int], interaction_type: str, notes: str = ""):
         """Record an NPC interaction for future reference"""
         coord_key = f"{coords[0]},{coords[1]}"
@@ -2248,6 +2503,16 @@ Context: {context} | Coords: {coords} """
         """
         if not movements:
             return True, "No movements to validate"
+
+        # Special case: During intro/cutscene sequences, movement validation may not work correctly
+        # Skip strict validation for known special locations
+        try:
+            location = game_state.get('player', {}).get('location', '')
+            if location in ['MOVING_VAN', 'INTRO']:
+                logger.debug(f"Skipping strict movement validation in special location: {location}")
+                return True, f"Special location ({location}) - validation relaxed"
+        except Exception as e:
+            logger.debug(f"Error checking location for validation: {e}")
 
         # Analyze current movement options
         movement_info = self.analyze_movement_preview(game_state)
