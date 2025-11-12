@@ -75,12 +75,20 @@ BATTLE_PROMPT_SUFFIX = """
 # Dialogue-specific prompt suffix
 DIALOGUE_PROMPT_SUFFIX = """
 💬 DIALOGUE DECISION GUIDE:
+🚨 **CRITICAL RULE #1: ALWAYS CHECK DIALOGUE STATE BEFORE MOVING**
+   - If you see "--- DIALOGUE ---" section in GAME STATE, dialogue is ACTIVE
+   - You MUST press A to dismiss dialogue BEFORE attempting any movement
+   - NEVER move (UP/DOWN/LEFT/RIGHT) while dialogue is visible
+   - The game will ignore movement commands during active dialogue
+
+📋 DIALOGUE PROGRESSION:
 1. Press A ONCE to initiate dialogue with NPC (when facing them)
 2. Press A to advance through dialogue lines (text scrolls)
 3. Press A AGAIN when text is fully displayed to dismiss dialogue box
-4. If pressing A 3+ times with no change -> dialogue might be over, try moving
-5. Never press A more than 5 times on same dialogue
-6. B button backs out of menus but does NOT skip dialogue in Emerald
+4. **Check if "--- DIALOGUE ---" is GONE from GAME STATE before moving**
+5. If pressing A 3+ times with no change -> dialogue might be over, try moving
+6. Never press A more than 5 times on same dialogue
+7. B button backs out of menus but does NOT skip dialogue in Emerald
 
 ⚡ DIALOGUE OPTIMIZATION:
 - Most NPC dialogues are 1-3 text boxes
@@ -102,11 +110,23 @@ DIALOGUE_PROMPT_SUFFIX = """
 - Try moving in a direction to exit the trigger zone
 - Some NPCs block paths until you talk to them
 - Check MOVEMENT MEMORY to see if this NPC caused issues before
+
+🔍 HOW TO VERIFY DIALOGUE IS DISMISSED:
+1. Look at GAME STATE section
+2. If "--- DIALOGUE ---" appears → dialogue is STILL ACTIVE → press A
+3. If "--- DIALOGUE ---" is ABSENT → dialogue is dismissed → safe to move
 """
 
 # Overworld-specific prompt suffix
 OVERWORLD_PROMPT_SUFFIX = """
 🗺️ OVERWORLD NAVIGATION GUIDE:
+🚨 **CRITICAL RULE #0: CHECK FOR DIALOGUE FIRST**
+   - BEFORE any movement, check GAME STATE for "--- DIALOGUE ---" section
+   - If "--- DIALOGUE ---" is present → press A to dismiss it first
+   - If "--- DIALOGUE ---" is absent → safe to proceed with navigation
+   - Movement commands are IGNORED while dialogue is active
+
+🧭 MOVEMENT RULES:
 1. Use MOVEMENT PREVIEW to see exactly what happens each direction
 2. Check the map for walls (#), grass (~), water (W), doors (D), stairs (S)
 3. Plan routes to minimize steps - direct paths are fastest
@@ -147,6 +167,8 @@ COMPACT_BASE_PROMPT = """Pokemon Emerald speedrun agent. Analyze frame and state
 
 PRIORITIES: Reach milestones fast, minimize actions, avoid unnecessary battles, optimize routes.
 
+🚨 CRITICAL: Check GAME STATE for "--- DIALOGUE ---". If present, press A to dismiss. NEVER move during dialogue.
+
 RECENT ACTIONS: {recent_actions}
 
 OBJECTIVES:
@@ -159,7 +181,7 @@ GAME STATE:
 
 RESPONSE FORMAT:
 ACTION: [single action: A/B/START/SELECT/UP/DOWN/LEFT/RIGHT/WAIT]
-REASON: [why this action?]
+REASON: [why this action? Did you check for dialogue first?]
 
 Context: {context} | Position: {coords}
 """
@@ -207,6 +229,7 @@ Your goal is to progress through the game as quickly as possible, reaching key m
 Available actions: A, B, START, SELECT, UP, DOWN, LEFT, RIGHT, WAIT
 
 ⚠️ CRITICAL REMINDERS:
+- 🚨 **CHECK FOR DIALOGUE BEFORE MOVING**: Look for "--- DIALOGUE ---" in GAME STATE. If present, press A to dismiss. NEVER move while dialogue is active.
 - Don't press the same button more than 10 times in a row
 - If coordinates don't change after movement, there's an obstacle
 - Check MOVEMENT PREVIEW before each move
@@ -215,7 +238,9 @@ Available actions: A, B, START, SELECT, UP, DOWN, LEFT, RIGHT, WAIT
 
 RESPONSE FORMAT (required):
 ANALYSIS:
-[What do you see? Where are you? What should you do next?]
+[1. First check: Is "--- DIALOGUE ---" present in GAME STATE? If yes, dialogue is ACTIVE.
+2. What do you see in the visual frame? Where are you?
+3. What should you do next? (If dialogue active → press A; if dialogue absent → proceed with plan)]
 
 OBJECTIVES:
 [Review current objectives. Need to update?
