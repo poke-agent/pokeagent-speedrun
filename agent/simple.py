@@ -1617,8 +1617,8 @@ class SimpleAgent:
                                     a_presses_at_location = 0
 
                                     # Also check current game state for Mom's dialogue
-                                    dialog_text = game_state.get("game", {}).get("dialog_text", "")
-                                    dialog_text_lower = dialog_text.lower()
+                                    dialog_text = game_state.get("game", {}).get("dialog_text", "") or ""
+                                    dialog_text_lower = dialog_text.lower() if dialog_text else ""
 
                                     for entry in list(self.state.history)[-30:]:
                                         # Count A presses at clock position
