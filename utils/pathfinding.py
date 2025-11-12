@@ -81,7 +81,15 @@ class Pathfinder:
         
         # Get blocked positions (walls, NPCs, water, etc.)
         blocked = self._get_blocked_positions(game_state, map_data)
-        
+
+        # Debug: Check if goal is blocked
+        if goal in blocked:
+            logger.warning(f"⚠️  CLAUDE DEBUG: Goal {goal} is BLOCKED! This will cause wrong path!")
+
+        # Debug: Show blocked tiles near start and goal
+        nearby_blocked = [pos for pos in blocked if abs(pos[0] - start[0]) <= 2 and abs(pos[1] - start[1]) <= 2]
+        logger.warning(f"🚫 CLAUDE DEBUG: Blocked tiles near start {start}: {nearby_blocked}")
+
         # Run A* algorithm
         path = self._astar(start, goal, blocked, map_data, max_distance)
         
@@ -95,9 +103,14 @@ class Pathfinder:
         if not path:
             logger.warning(f"No path found from {start} to {goal}")
             return None
-        
+
+        # Debug: Log the actual path coordinates
+        logger.warning(f"🛤️  CLAUDE DEBUG: Path coordinates: {path}")
+
         # Convert path to button commands
-        return self._path_to_buttons(path)
+        buttons = self._path_to_buttons(path)
+        logger.warning(f"🎮 CLAUDE DEBUG: Path buttons: {buttons}")
+        return buttons
     
     def _extract_map_data(self, game_state: Dict) -> Optional[Dict]:
         """Extract map data from game state."""

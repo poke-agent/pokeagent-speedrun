@@ -274,7 +274,7 @@ class SimpleAgent:
                 "objective_type": "location",
                 "target_value": "Clock Set",
                 "target_floor": 2,
-                "target_coords": (5, 1),  # Clock position on 2nd floor
+                "target_coords": (5, 2),  # Clock position on 2nd floor
                 "milestone_id": "CLOCK_SET",
             },
             {
@@ -1532,7 +1532,17 @@ class SimpleAgent:
                         if not navigation_target:
                             break
 
-                        # Check if we're already at the target
+                        # Check if we're already at the target OR adjacent to it
+                        # Adjacent means within 1 tile (for interacting with objects on walls)
+                        distance_to_target = abs(coords[0] - navigation_target[0]) + abs(coords[1] - navigation_target[1])
+                        is_adjacent = distance_to_target == 1
+
+                        if is_adjacent:
+                            # We're right next to the target (e.g., standing in front of clock on wall)
+                            # Let VLM handle the interaction instead of pathfinding
+                            logger.info(f"🎯 Adjacent to target {navigation_target} - letting VLM handle interaction")
+                            break
+
                         if coords != navigation_target:
                             # MULTI-FLOOR NAVIGATION: Check if we need to go to stairs first
 
