@@ -135,11 +135,33 @@ class Pathfinder:
         # Check collision data from map tiles
         if 'tiles' in map_data:
             tiles = map_data['tiles']
+            # Get player coordinates to convert tile indices to world coordinates
+            player_coords = map_data.get('player_coords')
+            logger.warning(f"🗺️ CLAUDE DEBUG Pathfinding: player_coords={player_coords}, tiles shape={len(tiles)}x{len(tiles[0]) if tiles else 0}")
+
             for y, row in enumerate(tiles):
                 if isinstance(row, list):
                     for x, tile in enumerate(row):
-                        if self._is_tile_blocked(tile):
-                            blocked.add((x, y))
+                        # Convert coordinates FIRST for all tiles (for debugging)
+                        if player_coords:
+                            radius = len(tiles) // 2
+                            world_x = player_coords['x'] - radius + x
+                            world_y = player_coords['y'] - radius + y
+
+                            # Debug stairs position specifically
+                            if (world_x, world_y) == (7, 1):
+                                logger.warning(f"🪜 CLAUDE DEBUG: Stairs tile at (7,1) - tile={tile}, type={type(tile)}")
+                                if isinstance(tile, (tuple, list)) and len(tile) >= 2:
+                                    logger.warning(f"🪜 CLAUDE DEBUG: Stairs behavior={tile[1]:02x} (hex={tile[1]}), collision={tile[2] if len(tile) > 2 else 'N/A'}")
+
+                            if self._is_tile_blocked(tile):
+                                blocked.add((world_x, world_y))
+                                if (world_x, world_y) in [(7,1), (7,2), (8,2)]:  # Debug specific positions
+                                    logger.warning(f"🚫 CLAUDE DEBUG: Blocking ({world_x},{world_y}) - tile={tile}")
+                        else:
+                            # Fallback: use array indices as-is
+                            if self._is_tile_blocked(tile):
+                                blocked.add((x, y))
 
         # Add NPC positions as blocked
         npcs = self._get_npc_positions(game_state)
@@ -162,7 +184,7 @@ class Pathfinder:
         Note: Ledges (JUMP_*) are NOT blocked here - they're handled
         via directional validation in _can_move_to().
         """
-        if isinstance(tile, tuple) and len(tile) >= 3:
+        if (isinstance(tile, (tuple, list))) and len(tile) >= 3:
             # Format: (tile_id, behavior, collision, elevation)
             collision = tile[2] if len(tile) > 2 else 0
             behavior = tile[1] if len(tile) > 1 else 0
@@ -186,13 +208,14 @@ class Pathfinder:
             # CRITICAL: Stairs/Ladders are interactive tiles that trigger warps
             # Treat them as blocked for pathfinding to avoid accidental floor changes
             STAIR_BEHAVIORS = {
+                0x60,  # Stairs/Warp tile (96 decimal)
                 0x61,  # Stairs (common)
                 0x62,  # Stairs down
                 0x63,  # Stairs up
                 # Add more stair behavior codes if needed
             }
             if behavior in STAIR_BEHAVIORS:
-                logger.debug(f"Treating stairs tile (behavior={behavior:02x}) as blocked for pathfinding")
+                logger.warning(f"🪜 Treating stairs tile (behavior={behavior:02x}) as blocked for pathfinding")
                 return True
 
         elif isinstance(tile, str):
