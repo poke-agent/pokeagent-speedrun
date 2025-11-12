@@ -1606,9 +1606,59 @@ class SimpleAgent:
                                 face_direction = "UP"
 
                             # Check if we just moved in that direction (already facing it)
-                            recent_actions_list = list(self.state.recent_actions)[-3:] if self.state.recent_actions else []
+                            recent_actions_list = list(self.state.recent_actions)[-10:] if self.state.recent_actions else []
                             if face_direction in recent_actions_list:
-                                # Already facing the target, let VLM handle interaction (press A)
+                                # Already facing the target
+                                # Special handling for clock objective: check if we've completed the full sequence
+                                # (interact with clock → Mom appears → finish dialogue)
+                                if obj.id == "story_clock_set":
+                                    # Check if we've seen Mom's dialogue after setting clock
+                                    mom_dialogue_seen = False
+                                    a_presses_at_location = 0
+
+                                    # Also check current game state for Mom's dialogue
+                                    dialog_text = game_state.get("game", {}).get("dialog_text", "")
+                                    dialog_text_lower = dialog_text.lower()
+
+                                    for entry in list(self.state.history)[-30:]:
+                                        # Count A presses at clock position
+                                        if entry.player_coords == coords and entry.action_taken == "A":
+                                            a_presses_at_location += 1
+                                        # Check for Mom's dialogue (she talks about going downstairs)
+                                        if entry.game_state_summary:
+                                            summary_lower = entry.game_state_summary.lower()
+                                            if any(keyword in summary_lower for keyword in ["mom", "downstairs", "breakfast", "dad", "get going"]):
+                                                mom_dialogue_seen = True
+                                                logger.warning(f"📝 Detected Mom's dialogue in history: {entry.game_state_summary[:50]}")
+
+                                    # Also check if current dialogue is from Mom
+                                    if any(keyword in dialog_text_lower for keyword in ["downstairs", "breakfast", "dad", "get going"]):
+                                        mom_dialogue_seen = True
+                                        logger.warning(f"📝 Detected Mom's dialogue in current state: {dialog_text[:50]}")
+
+                                    # If we've pressed A many times AND seen Mom's dialogue, objective is complete
+                                    if a_presses_at_location >= 5 and mom_dialogue_seen:
+                                        logger.warning(f"✅ CLOCK OBJECTIVE COMPLETE: Set clock ({a_presses_at_location} A presses) and talked with Mom - clearing target")
+                                        obj.target_coords = None
+                                        break
+                                    elif a_presses_at_location >= 10:
+                                        # Pressed A 10+ times but haven't seen Mom dialogue yet
+                                        # Probably still in clock menu or dialogue - let VLM continue
+                                        logger.warning(f"⏳ Clock interaction: {a_presses_at_location} A presses, waiting for Mom's dialogue")
+                                else:
+                                    # For non-clock objectives, use simpler logic
+                                    a_presses_at_location = 0
+                                    for entry in list(self.state.history)[-20:]:
+                                        if entry.player_coords == coords and entry.action_taken == "A":
+                                            a_presses_at_location += 1
+
+                                    if a_presses_at_location >= 5:
+                                        # Generic interaction complete
+                                        logger.warning(f"✅ INTERACTION COMPLETE: Pressed A {a_presses_at_location} times at {coords} - clearing target")
+                                        obj.target_coords = None
+                                        break
+
+                                # Let VLM handle interaction (press A)
                                 logger.warning(f"🎯 CLAUDE DEBUG: Adjacent to target {navigation_target} and facing {face_direction} - letting VLM handle interaction")
                                 break
                             else:
