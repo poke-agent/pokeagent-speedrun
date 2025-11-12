@@ -50,6 +50,7 @@ from utils.speedrun_router import SpeedrunRouter
 from utils.history_compressor import HistoryCompressor
 from utils.performance_metrics import PerformanceMetrics
 from utils.model_optimizer import ModelOptimizer
+from utils.collision_handler import get_collision_handler
 from agent.prompt_templates import get_compact_prompt, get_full_prompt
 
 logger = logging.getLogger(__name__)
@@ -228,6 +229,11 @@ class SimpleAgent:
         model_name = getattr(vlm, 'model_name', 'gemini-2.5-flash')  # Default to Gemini Flash
         self.model_optimizer = ModelOptimizer(model_name)
         logger.info(f"Model optimizer settings:\n{self.model_optimizer.format_settings_for_display()}")
+
+        # Collision handler (Phase 5.1 optimization)
+        # Intelligent collision tracking and recovery
+        self.collision_handler = get_collision_handler()
+        logger.info("Collision handler initialized (5 collision limit, 2 movement reset)")
 
         # Track last battle state for recording outcomes
         self.last_battle_state = None
@@ -1795,12 +1801,25 @@ EXAMPLE - DO THIS INSTEAD:
                 )
             else:
                 # FULL MODE for cloud models (context-aware detailed prompt)
-                # Combine movement memory, strategic memory, and speedrun progress
+                # Combine movement memory, strategic memory, speedrun progress, and collision warnings
                 combined_memory = movement_memory
                 if strategic_memory_text:
                     combined_memory += "\n\n" + strategic_memory_text if combined_memory else strategic_memory_text
                 if speedrun_progress_text:
                     combined_memory += "\n\n" + speedrun_progress_text if combined_memory else speedrun_progress_text
+
+                # Add collision handler warnings (Phase 5.1)
+                if coords:
+                    collision_warning = self.collision_handler.get_collision_warning(coords)
+                    if collision_warning:
+                        combined_memory += "\n\n" + collision_warning if combined_memory else collision_warning
+
+                    # Add safe directions if some are blocked
+                    safe_directions = self.collision_handler.get_safe_directions(coords)
+                    if len(safe_directions) < 4:
+                        blocked_dirs = set(["UP", "DOWN", "LEFT", "RIGHT"]) - set(safe_directions)
+                        safe_warning = f"⚠️ BLOCKED DIRECTIONS at {coords}: {', '.join(sorted(blocked_dirs))} are unreachable. Safe: {', '.join(sorted(safe_directions))}"
+                        combined_memory += "\n" + safe_warning if combined_memory else safe_warning
 
                 prompt = get_full_prompt(
                     context=context,
@@ -1968,6 +1987,46 @@ EXAMPLE - DO THIS INSTEAD:
             # Performance metrics: Take snapshot if needed (Phase 3.2)
             current_location = game_state.get('player', {}).get('location', 'UNKNOWN')
             self.performance_metrics.maybe_take_snapshot(current_location)
+
+            # Collision handler: Record movement for collision tracking (Phase 5.1)
+            # This happens BEFORE the action is executed, so we track based on the LAST action's result
+            # We'll track the position change on the NEXT call
+            # Store current position for next iteration's collision detection
+            if coords and coords[0] is not None and coords[1] is not None:
+                # Check if we moved since last action
+                if hasattr(self, '_last_tracked_position') and self._last_tracked_position is not None:
+                    previous_coords = self._last_tracked_position
+                    current_coords = coords
+
+                    # Determine if movement occurred
+                    moved = (current_coords != previous_coords)
+
+                    # Get the last action that was executed
+                    last_action = self._last_tracked_action if hasattr(self, '_last_tracked_action') else None
+
+                    if last_action in ["UP", "DOWN", "LEFT", "RIGHT"]:
+                        # Record the movement result
+                        collision_result = self.collision_handler.record_movement(
+                            current_position=previous_coords,  # Where we were when we tried to move
+                            action=last_action,
+                            moved=moved
+                        )
+
+                        # Log collision events
+                        if collision_result["collision_detected"]:
+                            logger.debug(
+                                f"🚧 Collision at {previous_coords}: {collision_result['consecutive_collisions']} consecutive"
+                            )
+
+                        # Check for abandonment signal
+                        if collision_result["should_abandon"]:
+                            logger.warning(
+                                f"❌ Path abandoned at {previous_coords} after {collision_result['consecutive_collisions']} collisions"
+                            )
+
+                # Store current position and action for next iteration
+                self._last_tracked_position = coords
+                self._last_tracked_action = actions if isinstance(actions, str) else (actions[0] if actions else None)
 
             return actions
 
