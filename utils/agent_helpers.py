@@ -89,12 +89,21 @@ def initialize_storyline_objectives(objectives_list: List[Any]) -> List[Dict[str
         },
         {
             "id": "story_clock_set",
-            "description": "Set the clock on the wall in the player's bedroom. Interact with the clock at (5,1) by pressing A while facing it, select YES, talk to Mom. Then, leave the house.",
+            "description": "Set the clock in player's bedroom",
             "objective_type": "location",
             "target_value": "Clock Set",
             "target_floor": 2,
-            "target_coords": (5, 1),  # Clock position on 2nd floor
+            "target_coords": (5, 2),  # Clock position on 2nd floor
             "milestone_id": "CLOCK_SET",
+            "steps": [
+                "1. Navigate to coordinates (5,2) on Floor 2 (player's bedroom)",
+                "2. Face the clock on the wall and interact with the clock at (5,1) (position yourself next to it)",
+                "3. Press A to interact with the clock",
+                "4. Press UP to move cursor to YES",
+                "5. Press A to confirm YES and set the clock",
+                "6. Go downstairs and talk to Mom (she'll be downstairs now)",
+                "7. Exit the house through the front door"
+            ]
         },
         {
             "id": "story_rival_house",
@@ -119,10 +128,18 @@ def initialize_storyline_objectives(objectives_list: List[Any]) -> List[Dict[str
         },
         {
             "id": "story_starter_chosen",
-            "description": "Choose starter Pokémon and receive first party member",
+            "description": "Choose starter Pokémon (save Prof. Birch from wild Pokemon)",
             "objective_type": "pokemon",
             "target_value": "Starter Pokémon",
             "milestone_id": "STARTER_CHOSEN",
+            "steps": [
+                "1. Travel north on Route 101 until you encounter Prof. Birch being chased",
+                "2. When prompted, press A to open the bag on the ground",
+                "3. Select a starter Pokemon (Treecko/Torchic/Mudkip - Mudkip recommended for speedrun)",
+                "4. Press A to confirm your choice",
+                "5. Defeat or run from the wild Pokemon attacking Prof. Birch",
+                "6. Talk to Prof. Birch after the battle"
+            ]
         },
         {
             "id": "story_birch_lab",
@@ -140,10 +157,18 @@ def initialize_storyline_objectives(objectives_list: List[Any]) -> List[Dict[str
         },
         {
             "id": "story_route_103",
-            "description": "Travel to Route 103 to meet rival",
+            "description": "Travel to Route 103 and battle your rival May/Brendan",
             "objective_type": "location",
             "target_value": "Route 103",
             "milestone_id": "ROUTE_103",
+            "steps": [
+                "1. Exit Birch's Lab and head north through Oldale Town",
+                "2. Continue north on Route 103",
+                "3. Find May/Brendan on Route 103 (they'll be visible on the path)",
+                "4. Talk to them to trigger your first rival battle",
+                "5. Defeat their starter Pokemon (use type advantage if possible)",
+                "6. After winning, they'll tell you to return to the lab"
+            ]
         },
         {
             "id": "story_received_pokedex",
@@ -562,12 +587,19 @@ def format_dynamic_objectives_for_prompt(active_objectives: List[Any], completed
 
         # Add special instructions for current objective
         if i == 0:
-            if obj.get("target_coords"):
-                formatted_lines.append(f"     📍 Navigate to: {obj['target_coords']}")
-            if obj.get("target_floor"):
-                formatted_lines.append(f"     🪜 Floor: {obj['target_floor']}")
-            if obj.get("target_object"):
-                formatted_lines.append(f"     🔍 Look for: {obj['target_object']}")
+            # Show detailed steps if available
+            if obj.get("steps"):
+                formatted_lines.append("     📋 STEP-BY-STEP INSTRUCTIONS:")
+                for step in obj["steps"]:
+                    formatted_lines.append(f"        {step}")
+            else:
+                # Fallback to basic hints if no steps provided
+                if obj.get("target_coords"):
+                    formatted_lines.append(f"     📍 Navigate to: {obj['target_coords']}")
+                if obj.get("target_floor"):
+                    formatted_lines.append(f"     🪜 Floor: {obj['target_floor']}")
+                if obj.get("target_object"):
+                    formatted_lines.append(f"     🔍 Look for: {obj['target_object']}")
 
     formatted_lines.extend([
         "",
