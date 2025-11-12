@@ -190,6 +190,9 @@ class SimpleAgent:
         self.navigation_target = None  # Target coordinates (x, y) for navigation
         self.navigation_stuck_count = 0  # Track if navigation is stuck
 
+        # Map change detection for clearing navigation on warps
+        self.last_map_id = None  # Track previous map ID to detect warps/floor changes
+
         # Frontier-based exploration state
         self.unreachable_frontiers = set()  # Track frontiers that cannot be reached
         self.last_detected_frontiers = []  # Cache last detected frontiers for frontier navigation
@@ -539,9 +542,24 @@ class SimpleAgent:
         return None
 
     def get_map_id(self, game_state: Dict[str, Any]) -> Optional[int]:
-        """Extract map ID from game state"""
+        """Extract map ID from game state (constructed from bank and number)"""
         try:
-            return game_state.get("map", {}).get("id")
+            map_data = game_state.get("map", {})
+            # Try direct ID first
+            map_id = map_data.get("id")
+            if map_id is not None:
+                return map_id
+
+            # Construct ID from bank and number (e.g., bank=1, number=0 → id=256)
+            bank = map_data.get("bank")
+            number = map_data.get("number")
+            if bank is not None and number is not None:
+                # Pokemon Emerald map encoding: bank * 256 + number
+                constructed_id = bank * 256 + number
+                return constructed_id
+
+            logger.warning(f"🗺️ CLAUDE DEBUG: map_id is None! map_data keys: {list(map_data.keys())}")
+            return None
         except Exception as e:
             logger.warning(f"Error getting map ID: {e}")
         return None
@@ -558,28 +576,30 @@ class SimpleAgent:
             True if path found and navigation started, False otherwise
         """
         current_pos = self.get_player_coords(game_state)
+        logger.warning(f"🧭 CLAUDE DEBUG: start_navigation called: current_pos={current_pos}, target={target}")
         if not current_pos:
-            logger.warning("Cannot start navigation: no player coordinates")
+            logger.warning("❌ CLAUDE DEBUG: Cannot start navigation: no player coordinates")
             return False
 
         if current_pos == target:
-            logger.info(f"Already at target {target}")
+            logger.warning(f"⚠️ CLAUDE DEBUG: Already at target {target}")
             self.navigation_path = None
             self.navigation_target = None
             return False
 
         # Calculate path using A* pathfinding
-        logger.info(f"🧭 Calculating path from {current_pos} to {target}...")
+        logger.warning(f"🧭 CLAUDE DEBUG: Calculating path from {current_pos} to {target}...")
         path_buttons = self.pathfinder.find_path(current_pos, target, game_state, max_distance=50)
+        logger.warning(f"🔍 CLAUDE DEBUG: Pathfinding returned: {path_buttons}")
 
         if not path_buttons:
-            logger.warning(f"❌ No path found from {current_pos} to {target}")
+            logger.warning(f"❌ CLAUDE DEBUG: No path found from {current_pos} to {target}")
             self.navigation_path = None
             self.navigation_target = None
             return False
 
-        logger.info(
-            f"✅ Path found: {len(path_buttons)} steps - {path_buttons[:10]}{'...' if len(path_buttons) > 10 else ''}"
+        logger.warning(
+            f"✅ CLAUDE DEBUG: Path found: {len(path_buttons)} steps - {path_buttons[:10]}{'...' if len(path_buttons) > 10 else ''}"
         )
         self.navigation_path = path_buttons
         self.navigation_target = target
@@ -754,10 +774,25 @@ class SimpleAgent:
 
     def get_current_floor(self, game_state: Dict[str, Any]) -> int:
         """
-        Determine current floor number from location name.
+        Determine current floor number from location name or map coordinates.
 
         Returns floor number (1, 2, etc.) or 1 if can't determine.
         """
+        # First, check map bank/number for player's house specifically
+        # Map (1, 0) = 1F, Map (1, 1) = 2F (player's house in Littleroot)
+        map_info = game_state.get("map", {})
+        if isinstance(map_info, dict):
+            map_bank = map_info.get("bank", 0)
+            map_number = map_info.get("number", 0)
+
+            # Player's house multi-floor detection
+            if map_bank == 1:
+                if map_number == 0:
+                    return 1  # 1F
+                elif map_number == 1:
+                    return 2  # 2F
+
+        # Fallback to location string parsing
         location = game_state.get("player", {}).get("location", "")
 
         if "2F" in location or "2nd" in location.lower():
@@ -1173,6 +1208,21 @@ class SimpleAgent:
         Returns:
             Action string or list of actions
         """
+        # CRITICAL: Check for map changes (warps, floor changes, entering buildings)
+        # If map changed, clear navigation so VLM can see new environment first
+        current_map_id = self.get_map_id(game_state)
+        logger.warning(f"🗺️ CLAUDE DEBUG: Map ID check: current={current_map_id}, last={getattr(self, 'last_map_id', 'NOT_SET')}")
+        if hasattr(self, 'last_map_id') and self.last_map_id is not None:
+            if current_map_id != self.last_map_id:
+                logger.warning(f"🗺️ MAP CHANGE DETECTED: {self.last_map_id} → {current_map_id}")
+                # Clear navigation path so agent doesn't execute old path on new map
+                if self.navigation_path or self.navigation_target:
+                    logger.warning(f"🚫 Clearing navigation path due to map change (warp/stairs/door)")
+                    self.navigation_path = None
+                    self.navigation_target = None
+        # Update last map ID for next step
+        self.last_map_id = current_map_id
+
         # FAST TRACK: Handle title sequence efficiently (just press A to skip naming/intro)
         context = self.get_game_context(game_state)
         if context == "title":
@@ -1431,23 +1481,29 @@ class SimpleAgent:
 
             # Get active objectives (needed for both navigation and LLM prompt)
             active_objectives = self.get_active_objectives()
+            logger.warning(f"🎯 CLAUDE DEBUG: Active objectives count: {len(active_objectives)}")
+            if active_objectives:
+                for obj in active_objectives:
+                    logger.warning(f"  - {obj.description} (coords={obj.target_coords}, floor={obj.target_floor})")
 
             # AUTO-NAVIGATION START: Check if current objective has target coordinates
             if active_objectives and coords:
-                # Check if we're super stuck (same position for 10+ steps) - override dialogue block
+                # Check if we're super stuck (same position for 10+ steps)
+                # BUT: Do NOT check during dialogue/menu/battle - those contexts naturally keep you in place
                 super_stuck = False
-                if len(self.state.history) >= 10:
+                if context not in ["dialogue", "menu", "battle"] and len(self.state.history) >= 10:
                     recent_coords = [e.player_coords for e in list(self.state.history)[-10:] if e.player_coords]
                     if len(recent_coords) >= 10 and len(set(recent_coords)) == 1:
                         super_stuck = True
                         logger.warning(
-                            f"🆘 SUPER STUCK: Same position {coords} for 10+ steps - forcing pathfinding override"
+                            f"🆘 SUPER STUCK: Same position {coords} for 10+ steps in overworld"
                         )
 
                 # Find first objective with target_coords OR target_object that needs navigation
                 for obj in active_objectives:
                     # Check if objective has navigation target (coords or object symbol)
                     has_navigation_target = (obj.target_coords or obj.target_object) and not obj.completed
+                    logger.debug(f"  Checking obj '{obj.description}': has_nav_target={has_navigation_target}")
 
                     if has_navigation_target:
                         # Resolve target coordinates
@@ -1482,6 +1538,7 @@ class SimpleAgent:
 
                             if obj.target_floor:
                                 current_floor = self.get_current_floor(game_state)
+                                logger.warning(f"🏢 CLAUDE DEBUG: Floor check: Current floor = {current_floor}, Target floor = {obj.target_floor}")
 
                                 if current_floor != obj.target_floor:
                                     # Need to change floors - navigate to stairs first
@@ -1508,11 +1565,14 @@ class SimpleAgent:
 
                             # Check if we're in dialogue/menu context - don't auto-navigate during these
                             # Don't allow super_stuck to override dialogue - dialogue must complete first!
+                            logger.warning(f"🎮 CLAUDE DEBUG: Context check: context='{context}', coords={coords}, target={navigation_target}")
                             if context not in ["dialogue", "menu", "battle"]:
-                                logger.info(f"🎯 Objective '{obj.description}' has target coords {obj.target_coords}")
-                                logger.info(f"📍 Current position: {coords}, Target: {navigation_target}")
+                                logger.warning(f"✅ CLAUDE DEBUG: Context '{context}' allows auto-navigation")
+                                logger.warning(f"🎯 CLAUDE DEBUG: Objective '{obj.description}' has target coords {obj.target_coords}")
+                                logger.warning(f"📍 CLAUDE DEBUG: Current position: {coords}, Target: {navigation_target}")
 
                                 # Start navigation if not already navigating
+                                logger.warning(f"🚀 CLAUDE DEBUG: About to call start_navigation({navigation_target})...")
                                 if self.start_navigation(navigation_target, game_state):
                                     # Return first action from the calculated path
                                     nav_action = self.get_next_navigation_action(game_state)
@@ -1531,6 +1591,8 @@ class SimpleAgent:
                                         )
                                         self.state.history.append(history_entry)
                                         return nav_action
+                            else:
+                                logger.info(f"⏸️  Auto-navigation blocked: context='{context}' (need overworld)")
                         break  # Only handle one objective at a time
 
             # Get relevant history and stuck detection
@@ -1773,6 +1835,33 @@ EXAMPLE - DO THIS INSTEAD:
 
             # Extract action(s) from structured response
             actions, reasoning = self._parse_structured_response(response, game_state)
+
+            # CRITICAL SAFETY CHECK: Prevent movement during active dialogue
+            dialogue_detected = game_state.get("game", {}).get("dialogue_detected", {})
+            has_active_dialogue = dialogue_detected.get("has_dialogue", False)
+
+            if has_active_dialogue:
+                # Dialogue is active - only allow A, B, or WAIT
+                movement_actions = ["UP", "DOWN", "LEFT", "RIGHT"]
+
+                # Check if action is a movement command
+                is_movement = False
+                if isinstance(actions, list):
+                    is_movement = any(action in movement_actions for action in actions)
+                elif isinstance(actions, str):
+                    is_movement = actions in movement_actions
+
+                if is_movement:
+                    logger.warning(
+                        f"⚠️ DIALOGUE SAFETY: Agent attempted {actions} during active dialogue. "
+                        f"Overriding to 'A' to dismiss dialogue."
+                    )
+                    print(
+                        f"\n🚨 DIALOGUE SAFETY OVERRIDE: Movement command {actions} blocked during dialogue.\n"
+                        f"   Automatically pressing 'A' to dismiss dialogue instead.\n"
+                    )
+                    actions = "A"
+                    reasoning = "OVERRIDDEN: Dialogue must be dismissed before movement"
 
             # Check for failed movement by comparing previous coordinates
             if len(self.state.history) > 0:

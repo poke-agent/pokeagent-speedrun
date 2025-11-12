@@ -205,18 +205,10 @@ class Pathfinder:
             if behavior in IMPASSABLE_BEHAVIORS:
                 return True
 
-            # CRITICAL: Stairs/Ladders are interactive tiles that trigger warps
-            # Treat them as blocked for pathfinding to avoid accidental floor changes
-            STAIR_BEHAVIORS = {
-                0x60,  # Stairs/Warp tile (96 decimal)
-                0x61,  # Stairs (common)
-                0x62,  # Stairs down
-                0x63,  # Stairs up
-                # Add more stair behavior codes if needed
-            }
-            if behavior in STAIR_BEHAVIORS:
-                logger.warning(f"🪜 Treating stairs tile (behavior={behavior:02x}) as blocked for pathfinding")
-                return True
+            # NOTE: Stairs (behavior 0x60) are NOT blocked in pathfinding
+            # The agent needs to use stairs to navigate between floors
+            # Higher-level navigation logic should handle floor transitions
+            # If we block stairs, the agent can't pathfind TO stairs when needed
 
         elif isinstance(tile, str):
             # String representation - check for wall symbols and stairs
