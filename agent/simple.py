@@ -1560,11 +1560,69 @@ class SimpleAgent:
                         distance_to_target = abs(coords[0] - navigation_target[0]) + abs(coords[1] - navigation_target[1])
                         is_adjacent = distance_to_target == 1
 
+                        logger.warning(f"📏 CLAUDE DEBUG: Distance check: coords={coords}, target={navigation_target}, distance={distance_to_target}, adjacent={is_adjacent}")
+
                         if is_adjacent:
                             # We're right next to the target (e.g., standing in front of clock on wall)
-                            # Let VLM handle the interaction instead of pathfinding
-                            logger.info(f"🎯 Adjacent to target {navigation_target} - letting VLM handle interaction")
-                            break
+                            # First, make sure we're FACING the target
+                            dx = navigation_target[0] - coords[0]
+                            dy = navigation_target[1] - coords[1]
+
+                            # Determine which direction to face
+                            if dx > 0:
+                                face_direction = "RIGHT"
+                            elif dx < 0:
+                                face_direction = "LEFT"
+                            elif dy > 0:
+                                face_direction = "DOWN"
+                            else:  # dy < 0
+                                face_direction = "UP"
+
+                            # Check if we just moved in that direction (already facing it)
+                            recent_actions_list = list(self.state.recent_actions)[-3:] if self.state.recent_actions else []
+                            if face_direction in recent_actions_list:
+                                # Already facing the target, let VLM handle interaction (press A)
+                                logger.warning(f"🎯 CLAUDE DEBUG: Adjacent to target {navigation_target} and facing {face_direction} - letting VLM handle interaction")
+                                break
+                            else:
+                                # Need to face the target first
+                                logger.warning(f"🎯 CLAUDE DEBUG: Adjacent to target {navigation_target} but not facing - turning {face_direction}")
+                                self.state.recent_actions.append(face_direction)
+                                history_entry = HistoryEntry(
+                                    timestamp=datetime.now(),
+                                    player_coords=coords,
+                                    map_id=map_id,
+                                    context=context,
+                                    action_taken=face_direction,
+                                    game_state_summary=f"Turning {face_direction} to face {navigation_target}",
+                                )
+                                self.state.history.append(history_entry)
+                                return face_direction
+
+                        # If distance is 2 and target is likely a wall object (blocked tile),
+                        # try to move one step closer in the direction of the target
+                        if distance_to_target == 2:
+                            dx = navigation_target[0] - coords[0]
+                            dy = navigation_target[1] - coords[1]
+
+                            # Prefer horizontal movement when equal distance (more natural for wall objects)
+                            if dx != 0:
+                                move_action = "RIGHT" if dx > 0 else "LEFT"
+                            else:
+                                move_action = "DOWN" if dy > 0 else "UP"
+
+                            logger.warning(f"🎯 CLAUDE DEBUG: Distance=2 from target - moving {move_action} to get adjacent")
+                            self.state.recent_actions.append(move_action)
+                            history_entry = HistoryEntry(
+                                timestamp=datetime.now(),
+                                player_coords=coords,
+                                map_id=map_id,
+                                context=context,
+                                action_taken=move_action,
+                                game_state_summary=f"Moving {move_action} to get adjacent to {navigation_target}",
+                            )
+                            self.state.history.append(history_entry)
+                            return move_action
 
                         if coords != navigation_target:
                             # MULTI-FLOOR NAVIGATION: Check if we need to go to stairs first
