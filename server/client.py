@@ -9,6 +9,7 @@ import time
 import base64
 import io
 import requests
+import threading
 from PIL import Image
 
 # Display-related imports (conditionally used)
@@ -24,6 +25,60 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent import Agent
 from utils.state_formatter import format_state_for_llm
+
+
+class AsyncAgentProcessor:
+    """Async agent processor that runs LLM calls in background thread"""
+
+    def __init__(self, agent):
+        self.agent = agent
+        self.processing_thread = None
+        self.result = None
+        self.is_processing = False
+        self.error = None
+
+    def start_processing(self, game_state):
+        """Start processing in background thread"""
+        if self.is_processing:
+            return False  # Already processing
+
+        self.is_processing = True
+        self.result = None
+        self.error = None
+
+        def process():
+            try:
+                print("🧠 LLM processing started (background thread)...")
+                self.result = self.agent.step(game_state)
+                print("✅ LLM processing complete")
+            except Exception as e:
+                print(f"❌ LLM processing error: {e}")
+                self.error = e
+            finally:
+                self.is_processing = False
+
+        self.processing_thread = threading.Thread(target=process, daemon=True)
+        self.processing_thread.start()
+        return True
+
+    def get_result(self):
+        """Get result if ready, otherwise return None. Clears result after returning."""
+        if self.is_processing:
+            return None  # Still processing
+
+        if self.error:
+            error_to_raise = self.error
+            self.error = None  # Clear error
+            raise error_to_raise
+
+        # Get result and clear it (consume once)
+        result = self.result
+        self.result = None  # Clear result so it's not returned multiple times
+        return result
+
+    def is_ready(self):
+        """Check if processing is complete"""
+        return not self.is_processing
 
 
 def update_display_with_status(screen, font, mode, step_count, additional_info="", frame_surface=None):
@@ -75,7 +130,10 @@ def run_multiprocess_client(server_port=8000, args=None):
     agent = Agent(args)
     print(f"✅ Agent initialized")
     print(f"🎮 Client connected to server at {server_url}")
-    
+
+    # Initialize async agent processor
+    async_processor = AsyncAgentProcessor(agent)
+
     # Display setup
     headless = args and args.headless
     screen = None
@@ -308,7 +366,13 @@ def run_multiprocess_client(server_port=8000, args=None):
                             img = Image.open(io.BytesIO(img_data))
                             frame_array = np.array(img)
                             frame_surface = pygame.surfarray.make_surface(frame_array.swapaxes(0, 1))
-                            update_display_with_status(screen, font, mode, step_count, frame_surface=frame_surface)
+
+                            # Show LLM processing status if in AUTO mode
+                            status_info = ""
+                            if mode == "AUTO" and async_processor.is_processing:
+                                status_info = "🧠 LLM Processing..."
+
+                            update_display_with_status(screen, font, mode, step_count, status_info, frame_surface=frame_surface)
                         else:
                             update_display_with_status(screen, font, mode, step_count, "No frame data")
                     else:
@@ -320,105 +384,127 @@ def run_multiprocess_client(server_port=8000, args=None):
             
             # Auto agent processing (both headless and display modes)
             if mode == "AUTO":
+                # Check if we have a result ready from previous processing
+                if async_processor.is_ready():
+                    result = async_processor.get_result()
+                    if result and result.get('action'):
+                        # Convert action to buttons list format expected by server
+                        action = result['action']
+                        if isinstance(action, list):
+                            buttons = action  # Already a list of buttons
+                        else:
+                            # Single action string, convert to list
+                            buttons = action.split(',') if ',' in action else [action]
+                            buttons = [btn.strip() for btn in buttons]
+
+                        try:
+                            response = requests.post(
+                                f"{server_url}/action",
+                                json={"buttons": buttons},
+                                timeout=5
+                            )
+                            if response.status_code == 200:
+                                step_count += 1
+                                print(f"🎮 Agent: {action} (sent successfully)")
+                                print(f"🎮 Step {step_count}: {result['action']}")
+                                # DON'T update last_agent_time here! Wait for queue to empty first.
+                                # This prevents sending multiple actions before previous ones finish.
+
+                                # Auto-save checkpoint after each step for persistence
+                                try:
+                                    # Sync client's LLM metrics to server before saving checkpoint
+                                    try:
+                                        from utils.llm_logger import get_llm_logger
+                                        client_llm_logger = get_llm_logger()
+                                        if client_llm_logger:
+                                            sync_response = requests.post(
+                                                f"{server_url}/sync_llm_metrics",
+                                                json={"cumulative_metrics": client_llm_logger.cumulative_metrics},
+                                                timeout=5
+                                            )
+                                            if sync_response.status_code == 200:
+                                                if step_count % 10 == 0:  # Log every 10 steps to avoid spam
+                                                    print(f"🔄 LLM metrics synced to server")
+                                    except Exception as e:
+                                        print(f"⚠️ LLM metrics sync error: {e}")
+
+                                    # Save game state checkpoint
+                                    checkpoint_response = requests.post(
+                                        f"{server_url}/checkpoint",
+                                        json={"step_count": step_count},
+                                        timeout=10
+                                    )
+
+                                    # Save agent history to checkpoint_llm.txt
+                                    history_response = requests.post(
+                                        f"{server_url}/save_agent_history",
+                                        timeout=5
+                                    )
+
+                                    if checkpoint_response.status_code == 200 and history_response.status_code == 200:
+                                        if step_count % 10 == 0:  # Log every 10 steps to avoid spam
+                                            print(f"💾 Checkpoint and history saved at step {step_count}")
+                                    else:
+                                        print(f"⚠️ Save failed - Checkpoint: {checkpoint_response.status_code}, History: {history_response.status_code}")
+                                except requests.exceptions.RequestException as e:
+                                    print(f"⚠️ Checkpoint/history save error: {e}")
+                            else:
+                                print(f"🎮 Agent: {action} (server error: {response.status_code})")
+                        except requests.exceptions.RequestException as e:
+                            print(f"🎮 Agent: {action} (connection error: {e})")
+
+                # Start new processing ONLY if:
+                # 1. Not already processing
+                # 2. Queue is empty (actions finished executing)
+                # 3. Enough time has passed since last decision (3 sec cooldown)
                 current_time = time.time()
-                if current_time - last_agent_time > 3.0:  # Every 3 seconds
-                    # Check if action queue is ready
+                if not async_processor.is_processing:
+                    # Check if action queue is empty (critical!)
                     try:
                         queue_response = requests.get(f"{server_url}/queue_status", timeout=1)
                         if queue_response.status_code == 200:
                             queue_status = queue_response.json()
                             if queue_status.get("queue_empty", False):
-                                # Get state and process
-                                response = requests.get(f"{server_url}/state", timeout=5)
-                                if response.status_code == 200:
-                                    state_data = response.json()
-                                    screenshot_base64 = state_data.get("visual", {}).get("screenshot_base64", "")
-                                    if screenshot_base64:
-                                        img_data = base64.b64decode(screenshot_base64)
-                                        screenshot = Image.open(io.BytesIO(img_data))
-                                        
-                                        game_state = {
-                                            'frame': screenshot,
-                                            'player': state_data.get('player', {}),
-                                            'game': state_data.get('game', {}),
-                                            'map': state_data.get('map', {}),
-                                            'milestones': state_data.get('milestones', {}),
-                                            'visual': state_data.get('visual', {}),
-                                            'step_number': state_data.get('step_number', 0),
-                                            'status': state_data.get('status', ''),
-                                            'action_queue_length': state_data.get('action_queue_length', 0)
-                                        }
-                                        
-                                        result = agent.step(game_state)
-                                        if result and result.get('action'):
-                                            # Convert action to buttons list format expected by server
-                                            action = result['action']
-                                            if isinstance(action, list):
-                                                buttons = action  # Already a list of buttons
-                                            else:
-                                                # Single action string, convert to list
-                                                buttons = action.split(',') if ',' in action else [action]
-                                                buttons = [btn.strip() for btn in buttons]
-                                            
-                                            try:
-                                                response = requests.post(
-                                                    f"{server_url}/action",
-                                                    json={"buttons": buttons},
-                                                    timeout=5
-                                                )
-                                                if response.status_code == 200:
-                                                    step_count += 1
-                                                    print(f"🎮 Agent: {action} (sent successfully)")
-                                                    print(f"🎮 Step {step_count}: {result['action']}")
-                                                    last_agent_time = current_time
-                                                    
-                                                    # Auto-save checkpoint after each step for persistence
-                                                    try:
-                                                        # Sync client's LLM metrics to server before saving checkpoint
-                                                        try:
-                                                            from utils.llm_logger import get_llm_logger
-                                                            client_llm_logger = get_llm_logger()
-                                                            if client_llm_logger:
-                                                                sync_response = requests.post(
-                                                                    f"{server_url}/sync_llm_metrics",
-                                                                    json={"cumulative_metrics": client_llm_logger.cumulative_metrics},
-                                                                    timeout=5
-                                                                )
-                                                                if sync_response.status_code == 200:
-                                                                    if step_count % 10 == 0:  # Log every 10 steps to avoid spam
-                                                                        print(f"🔄 LLM metrics synced to server")
-                                                        except Exception as e:
-                                                            print(f"⚠️ LLM metrics sync error: {e}")
-                                                        
-                                                        # Save game state checkpoint
-                                                        checkpoint_response = requests.post(
-                                                            f"{server_url}/checkpoint",
-                                                            json={"step_count": step_count},
-                                                            timeout=10
-                                                        )
-                                                        
-                                                        # Save agent history to checkpoint_llm.txt
-                                                        history_response = requests.post(
-                                                            f"{server_url}/save_agent_history",
-                                                            timeout=5
-                                                        )
-                                                        
-                                                        if checkpoint_response.status_code == 200 and history_response.status_code == 200:
-                                                            if step_count % 10 == 0:  # Log every 10 steps to avoid spam
-                                                                print(f"💾 Checkpoint and history saved at step {step_count}")
-                                                        else:
-                                                            print(f"⚠️ Save failed - Checkpoint: {checkpoint_response.status_code}, History: {history_response.status_code}")
-                                                    except requests.exceptions.RequestException as e:
-                                                        print(f"⚠️ Checkpoint/history save error: {e}")
-                                                else:
-                                                    print(f"🎮 Agent: {action} (server error: {response.status_code})")
-                                            except requests.exceptions.RequestException as e:
-                                                print(f"🎮 Agent: {action} (connection error: {e})")
+                                # Queue is empty - update timer and check cooldown
+                                time_since_last = current_time - last_agent_time
+
+                                if time_since_last > 5.0:
+                                    # Get state and start async processing
+                                    response = requests.get(f"{server_url}/state", timeout=5)
+                                    if response.status_code == 200:
+                                        state_data = response.json()
+                                        screenshot_base64 = state_data.get("visual", {}).get("screenshot_base64", "")
+                                        if screenshot_base64:
+                                            img_data = base64.b64decode(screenshot_base64)
+                                            screenshot = Image.open(io.BytesIO(img_data))
+
+                                            game_state = {
+                                                'frame': screenshot,
+                                                'player': state_data.get('player', {}),
+                                                'game': state_data.get('game', {}),
+                                                'map': state_data.get('map', {}),
+                                                'milestones': state_data.get('milestones', {}),
+                                                'visual': state_data.get('visual', {}),
+                                                'step_number': state_data.get('step_number', 0),
+                                                'status': state_data.get('status', ''),
+                                                'action_queue_length': state_data.get('action_queue_length', 0)
+                                            }
+
+                                            # Start async processing (non-blocking)
+                                            if async_processor.start_processing(game_state):
+                                                print("🧠 Started LLM processing in background...")
+                                                # Update timer NOW when we start new LLM call
+                                                last_agent_time = current_time
+                                else:
+                                    # Queue empty but still in cooldown period
+                                    remaining = 5.0 - time_since_last
+                                    # if remaining > 0.5:  # Only log if significant time remaining
+                                    #     print(f"⏳ Queue empty, waiting {remaining:.1f}s before next decision...")
                     except Exception as e:
                         print(f"❌ AUTO mode error: {e}")
                         import traceback
                         traceback.print_exc()
-            
+
             # Small sleep to prevent CPU spinning
             if headless:
                 time.sleep(0.1)
