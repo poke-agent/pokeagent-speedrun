@@ -521,7 +521,7 @@ class LMStudioBackend(VLMBackend):
         self.max_tokens = kwargs.get('max_tokens', 2048)  # Shorter responses by default
         self.timeout = kwargs.get('timeout', 120)  # 2 minute timeout
         self.temperature = kwargs.get('temperature', 0.7)  # Lower for more focused responses
-        self.cooldown = kwargs.get('cooldown', 20.0)  # Cooldown period in seconds after each call
+        self.cooldown = kwargs.get('cooldown', 10.0)  # Cooldown period in seconds after each call
         self.top_p = kwargs.get('top_p', 0.8)
         self.top_k = kwargs.get('top_k', 20)
         self.seed = kwargs.get('seed', 3407)
@@ -544,21 +544,41 @@ class LMStudioBackend(VLMBackend):
 
     def _apply_cooldown(self):
         """Apply cooldown period between API calls to avoid overwhelming local model"""
-        if self.cooldown > 0 and self._last_call_time > 0:
-            current_time = time.time()
-            time_since_last_call = current_time - self._last_call_time
+        if self.cooldown <= 0:
+            print(f"[LM STUDIO COOLDOWN] Cooldown disabled (cooldown={self.cooldown})")
+            return  # Cooldown disabled
 
-            if time_since_last_call < self.cooldown:
-                sleep_time = self.cooldown - time_since_last_call
-                logger.info(f"⏱️  LM Studio cooldown: waiting {sleep_time:.1f}s (cooldown={self.cooldown}s, since_last={time_since_last_call:.1f}s)")
-                time.sleep(sleep_time)
-            else:
-                logger.info(f"⏱️  No cooldown needed: {time_since_last_call:.1f}s since last call (cooldown={self.cooldown}s)")
+        current_time = time.time()
+
+        if self._last_call_time == 0:
+            print(f"[LM STUDIO COOLDOWN] First call - no cooldown (last_call_time={self._last_call_time})")
+            logger.info(f"⏱️  First LM Studio call - no cooldown applied")
+            return
+
+        time_since_last_call = current_time - self._last_call_time
+
+        if time_since_last_call < self.cooldown:
+            sleep_time = self.cooldown - time_since_last_call
+            print(f"[LM STUDIO COOLDOWN] SLEEPING {sleep_time:.1f}s (target={self.cooldown}s, elapsed={time_since_last_call:.1f}s)")
+            logger.info(f"⏱️  LM Studio cooldown: waiting {sleep_time:.1f}s (target={self.cooldown}s, elapsed={time_since_last_call:.1f}s)")
+            time.sleep(sleep_time)
+            print(f"[LM STUDIO COOLDOWN] Sleep complete")
+            logger.info(f"⏱️  Cooldown complete - proceeding with request")
+        else:
+            print(f"[LM STUDIO COOLDOWN] No sleep needed: {time_since_last_call:.1f}s elapsed (target={self.cooldown}s)")
+            logger.info(f"⏱️  No cooldown needed: {time_since_last_call:.1f}s elapsed (target={self.cooldown}s)")
 
     def _update_last_call_time(self):
         """Update the last call time to now (call this AFTER request completes)"""
+        old_time = self._last_call_time
         self._last_call_time = time.time()
-        logger.debug(f"⏱️  Updated last call time: {self._last_call_time}")
+        if old_time > 0:
+            elapsed = self._last_call_time - old_time
+            print(f"[LM STUDIO COOLDOWN] Timer updated: request took {elapsed:.1f}s total")
+            logger.info(f"⏱️  Request completed in {elapsed:.1f}s - next call cooldown starts now")
+        else:
+            print(f"[LM STUDIO COOLDOWN] Timer started: first request complete")
+            logger.info(f"⏱️  First request completed - cooldown timer started")
 
     def _encode_image_to_base64(self, img: Union[Image.Image, np.ndarray]) -> str:
         """Encode image to base64 data URL"""
@@ -614,7 +634,9 @@ class LMStudioBackend(VLMBackend):
     def get_query(self, img: Union[Image.Image, np.ndarray], text: str, module_name: str = "Unknown") -> str:
         """Process an image and text prompt using LM Studio API"""
         # Apply cooldown before making request
+        print(f"[LM STUDIO] About to apply cooldown (target={self.cooldown}s)...")
         self._apply_cooldown()
+        print(f"[LM STUDIO] Cooldown complete, proceeding with request")
 
         start_time = time.time()
 
