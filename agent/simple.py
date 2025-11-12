@@ -274,7 +274,7 @@ class SimpleAgent:
                 "objective_type": "location",
                 "target_value": "Clock Set",
                 "target_floor": 2,
-                "target_coords": (5, 2),  # Clock position on 2nd floor
+                "target_coords": (5, 1),  # Clock position on 2nd floor
                 "milestone_id": "CLOCK_SET",
             },
             {
@@ -1251,6 +1251,23 @@ class SimpleAgent:
         if dialogue_confidence < 0.5:
             has_active_dialogue = False
             logger.debug(f"Dialogue confidence too low ({dialogue_confidence}) - treating as no active dialogue")
+
+        # YES/NO MENU DETECTION: Check if we're stuck in a Yes/No prompt (like clock setup)
+        # These menus default to "NO" and need UP button to select "YES"
+        if has_active_dialogue and dialog_text and a_count >= 3:
+            # Check if dialogue text contains Yes/No pattern (case insensitive)
+            dialog_lower = dialog_text.lower()
+            is_yes_no_menu = any(pattern in dialog_lower for pattern in [
+                "yes", "no", "set the clock", "is that okay", "is this ok"
+            ])
+
+            # Also check if we already pressed UP recently (to avoid UP spam)
+            up_count = recent_actions.count("UP")
+
+            if is_yes_no_menu and a_count >= 3 and up_count == 0:
+                # Pressed A multiple times on Yes/No menu but haven't pressed UP yet
+                logger.warning(f"🔼 YES/NO MENU DETECTED: Pressing UP to select YES (dialogue: {dialog_text[:50]})")
+                return "UP"
 
         # DIALOGUE LOOP DETECTION: Check if we've seen the exact same dialogue text multiple times
         # AND we're pressing A repeatedly without the dialogue changing
