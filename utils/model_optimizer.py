@@ -101,9 +101,19 @@ class ModelOptimizer:
             "add_strategic_context": True,
             "add_examples": False,
         },
-        "qwen3-vl-4b-instruct-mlx": {
+        "qwen3-vl-4b-instruct": {
             "family": "local",
-            "context_window": 32000,
+            "context_window": 2048,
+            "strengths": ["speed", "vision"],
+            "prompt_style": "compact",
+            "max_prompt_tokens": 2048,
+            "compact_mode": True,
+            "add_strategic_context": False,
+            "add_examples": False,
+        },
+         "qwen3-vl-4b-instruct-mlx": {
+            "family": "local",
+            "context_window": 2048,
             "strengths": ["speed", "vision"],
             "prompt_style": "compact",
             "max_prompt_tokens": 2048,

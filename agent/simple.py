@@ -1181,8 +1181,8 @@ class SimpleAgent:
 
         # SMART DIALOGUE HANDLING: Use memory reader detection for better decisions
         recent_actions = list(self.state.recent_actions)[-15:] if self.state.recent_actions else []
-        a_count = 0  # recent_actions.count("A")
-        b_count = 0  # recent_actions.count("B")
+        a_count = recent_actions.count("A")  # Count recent A presses
+        b_count = recent_actions.count("B")  # Count recent B presses
 
         # Check if dialogue is actively detected by memory reader
         dialogue_detected = game_state.get("game", {}).get("dialogue_detected", {})
@@ -1203,7 +1203,8 @@ class SimpleAgent:
             logger.debug(f"Dialogue confidence too low ({dialogue_confidence}) - treating as no active dialogue")
 
         # DIALOGUE LOOP DETECTION: Check if we've seen the exact same dialogue text multiple times
-        if has_active_dialogue and dialog_text:
+        # AND we're pressing A repeatedly without the dialogue changing
+        if has_active_dialogue and dialog_text and a_count >= 5:
             # Check last few history entries for same dialogue
             recent_history = list(self.state.history)[-15:]
             same_text_count = 0
@@ -1213,10 +1214,11 @@ class SimpleAgent:
                 else:
                     break
 
-            # More aggressive detection - trigger after just 3 repeats
+            # Only trigger escape if we've pressed A 5+ times AND seen same dialogue 3+ times
+            # This means we're truly stuck in a loop, not just multi-box dialogue
             if same_text_count >= 3:
                 logger.warning(
-                    f"🚨 DIALOGUE LOOP DETECTED: Same dialogue text seen {same_text_count} times - trying to escape"
+                    f"🚨 DIALOGUE LOOP DETECTED: Same dialogue text seen {same_text_count} times AND pressed A {a_count} times - trying to escape"
                 )
 
                 # Check current coordinates to decide escape direction
@@ -1245,10 +1247,11 @@ class SimpleAgent:
             logger.warning(f"🚨 STUCK PRESSING B: Pressed B {b_count} times, trying A to advance/dismiss dialogue")
             return "A"
 
-        # If in detected dialogue and pressed A 3+ times, wait for dialogue to process
-        if context == "dialogue" and a_count >= 3:
+        # If in detected dialogue and pressed A many times (10+), wait for dialogue to process
+        # Increased from 3 to 5 to avoid false positives from previous actions in history
+        if context == "dialogue" and a_count >= 10:
             if has_active_dialogue:
-                # Dialogue still active after 3 A presses - wait for it to process
+                # Dialogue still active after 10 A presses - wait for it to process
                 logger.info(f"⏳ Dialogue active, pressed A {a_count} times - waiting for dialogue to advance")
                 return "WAIT"
             else:
@@ -1257,7 +1260,7 @@ class SimpleAgent:
                 return "DOWN"  # Try to move away
 
         # If in overworld but pressing A many times (likely stuck on NPC dialogue)
-        if context == "overworld" and a_count >= 10:
+        if context == "overworld" and a_count >= 15:
             if has_active_dialogue:
                 # Dialogue is actually active - wait
                 logger.info(f"⏳ Overworld with active dialogue, pressed A {a_count} times - waiting")
@@ -1392,7 +1395,7 @@ class SimpleAgent:
                     self.navigation_path = None  # Clear so we recalculate after dialogue
 
             # AUTO-NAVIGATION: Check if we have an active navigation path
-            # BUT skip auto-navigation in special locations (MOVING_VAN, INTRO)
+            # BUT skip auto-navigation in special locations (MOVING_VAN, INTRO) or critical contexts (dialogue, menu, battle)
             location = game_state.get('player', {}).get('location', '')
             if location in ['MOVING_VAN', 'INTRO']:
                 # Cancel any active navigation in special locations
@@ -1400,8 +1403,15 @@ class SimpleAgent:
                     logger.info(f"🚫 Cancelling auto-navigation in special location: {location}")
                     self.navigation_path = []
                     self.navigation_target = None
+            elif context in ["dialogue", "menu", "battle"]:
+                # CRITICAL: Don't continue navigation during dialogue/menu/battle
+                # Clear the path so we don't try to navigate
+                if self.navigation_path or self.navigation_target:
+                    logger.info(f"⏸️  Pausing auto-navigation - in {context} context")
+                    self.navigation_path = None  # Clear path
+                    # Don't clear target - we can resume later
             else:
-                # Normal auto-navigation (outside special locations)
+                # Normal auto-navigation (outside special locations and critical contexts)
                 nav_action = self.get_next_navigation_action(game_state)
                 if nav_action:
                     logger.info(f"🧭 Auto-navigation: {nav_action} toward {self.navigation_target}")
@@ -1497,8 +1507,8 @@ class SimpleAgent:
                                 break  # Skip auto-navigation, let VLM handle it
 
                             # Check if we're in dialogue/menu context - don't auto-navigate during these
-                            # UNLESS we're super stuck (same position 10+ steps)
-                            if context not in ["dialogue", "menu", "battle"] or super_stuck:
+                            # Don't allow super_stuck to override dialogue - dialogue must complete first!
+                            if context not in ["dialogue", "menu", "battle"]:
                                 logger.info(f"🎯 Objective '{obj.description}' has target coords {obj.target_coords}")
                                 logger.info(f"📍 Current position: {coords}, Target: {navigation_target}")
 
