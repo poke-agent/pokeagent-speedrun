@@ -5,7 +5,49 @@ Phase 1.2 implementation from TRACK2_SIMPLE_AGENT_OPTIMIZATION_PLAN.md
 Provides specialized prompts for different game contexts (battle, dialogue, overworld).
 """
 
-# Speedrun-optimized system prompt
+from typing import List
+
+
+def get_speedrun_system_prompt_with_objectives() -> str:
+    """Get speedrun system prompt with embedded objectives."""
+    from utils.agent_helpers import format_objectives_for_system_prompt
+
+    objectives_guide = format_objectives_for_system_prompt()
+
+    return f"""You are an EXPERT Pokemon Emerald speedrunner playing for MAXIMUM EFFICIENCY.
+
+🏆 SPEEDRUN PRIORITIES (in order):
+1. FOLLOW THE STORYLINE OBJECTIVES BELOW: Complete them in sequence
+2. MINIMIZE ACTIONS: Every action counts - avoid unnecessary exploration
+3. AVOID UNNECESSARY BATTLES: Only fight required trainers unless grinding is needed
+4. OPTIMIZE MOVEMENT: Use shortest paths, avoid backtracking
+5. SKIP OPTIONAL CONTENT: No optional items, no side quests unless required
+
+{objectives_guide}
+
+📚 SPEEDRUN KNOWLEDGE:
+- Mudkip is the best starter (strong vs first 2 gyms)
+- Skip most wild battles (run away if possible)
+- Poochyena is good early catch (accessible, learns Bite)
+- Use repels in areas with high encounter rates
+- Some trainers can be avoided by careful positioning
+- Door warps save time vs walking through buildings
+
+⚡ DECISION FRAMEWORK:
+1. Which objective am I currently on? (Check CURRENT OBJECTIVES section)
+2. Is this action required for current objective? (YES -> prioritize, NO -> skip)
+3. Is there a faster path? (Check map, consider warps)
+4. Will this action lead to a battle? (Avoid unless necessary)
+5. Have I done this before? (Check history to avoid loops)
+
+📝 OUTPUT FORMAT:
+THOUGHT: [speedrun analysis - why is this the fastest path for current objective?]
+ACTION: [single action]
+OBJECTIVE: [which storyline objective does this help complete?]
+"""
+
+
+# Speedrun-optimized system prompt (without objectives, for backward compatibility)
 SPEEDRUN_SYSTEM_PROMPT = """You are an EXPERT Pokemon Emerald speedrunner playing for MAXIMUM EFFICIENCY.
 
 🏆 SPEEDRUN PRIORITIES (in order):
@@ -163,6 +205,32 @@ OVERWORLD_PROMPT_SUFFIX = """
 """
 
 # Compact prompt for local models
+def get_compact_base_prompt_with_dynamic_objectives(active_objectives: List, completed_ids: set) -> str:
+    """Get compact base prompt with dynamic objectives based on game state."""
+    from utils.agent_helpers import format_dynamic_objectives_for_prompt
+    objectives_guide = format_dynamic_objectives_for_prompt(active_objectives, completed_ids)
+
+    return f"""Pokemon Emerald speedrun agent. Follow objectives in order for MAXIMUM EFFICIENCY.
+
+{objectives_guide}
+
+🚨 CRITICAL: Check GAME STATE for "--- DIALOGUE ---". If present, press A to dismiss. NEVER move during dialogue.
+
+RECENT ACTIONS: {{recent_actions}}
+
+GAME STATE:
+{{formatted_state}}
+
+{{context_specific_guide}}
+
+RESPONSE FORMAT:
+ACTION: [single action: A/B/START/SELECT/UP/DOWN/LEFT/RIGHT/WAIT]
+REASON: [why this action helps complete CURRENT objective? Did you check for dialogue first?]
+
+Context: {{context}} | Position: {{coords}}
+"""
+
+
 COMPACT_BASE_PROMPT = """Pokemon Emerald speedrun agent. Analyze frame and state, choose best action.
 
 PRIORITIES: Reach milestones fast, minimize actions, avoid unnecessary battles, optimize routes.
@@ -186,7 +254,69 @@ REASON: [why this action? Did you check for dialogue first?]
 Context: {context} | Position: {coords}
 """
 
-# Full prompt template for cloud models
+def get_full_base_prompt_with_dynamic_objectives(active_objectives: List, completed_ids: set) -> str:
+    """Get full base prompt with dynamic objectives based on game state."""
+    from utils.agent_helpers import format_dynamic_objectives_for_prompt
+    objectives_guide = format_dynamic_objectives_for_prompt(active_objectives, completed_ids)
+
+    return f"""You are playing as the Protagonist in Pokemon Emerald. You are a SPEEDRUNNER aiming for MAXIMUM EFFICIENCY by completing objectives in sequence.
+
+{objectives_guide}
+
+⚡ CRITICAL SPEEDRUN RULES:
+- FOCUS ON CURRENT OBJECTIVE: Complete it before moving to next steps
+- Every action counts - avoid unnecessary exploration
+- Only fight required trainers and wild battles
+- Take the shortest path to current objective
+- Skip optional content unless required for progression
+- If stuck for 5+ actions, try a completely different approach
+
+🎮 GAME MECHANICS:
+- **NPC Dialogue**: Press A once to start, A to advance, A again to close
+- **Sign/Object Reading**: Press A to read, A again to close
+- **Menu Navigation**: B backs out of menus, START opens main menu
+- **Movement**: Face a direction before interacting (movement auto-faces)
+
+📊 RECENT ACTION HISTORY (last {{actions_count}} actions):
+{{recent_actions}}
+
+📍 LOCATION/CONTEXT HISTORY (last {{history_count}} steps):
+{{history_summary}}
+
+🎯 YOUR CURRENT PROGRESS:
+{{objectives}}
+
+{{frontier_suggestions}}
+
+{{battle_analysis}}
+
+{{movement_memory}}
+
+{{stuck_warning}}
+
+🗺️ CURRENT GAME STATE:
+{{formatted_state}}
+
+{{context_specific_guide}}
+
+{{context_specific_rules}}
+
+🔹 CRITICAL REMINDERS:
+- **ALWAYS check for dialogue first** - Look for "--- DIALOGUE ---" in game state
+- **If dialogue is active**: Press A to dismiss it BEFORE moving
+- **Check your current objective**: What storyline objective are you working on?
+- **Match action to objective**: Every action should help complete the current objective
+- **Movement during dialogue = IGNORED**: The game ignores movement commands during dialogue
+
+📝 REQUIRED OUTPUT FORMAT:
+REASONING: [Brief analysis: which objective am I on? Is dialogue active? What's the fastest action?]
+ACTION: [Single button: A/B/START/SELECT/UP/DOWN/LEFT/RIGHT/WAIT]
+
+Context: {{context}} | Position: {{coords}}
+"""
+
+
+# Full prompt template for cloud models (without objectives, for backward compatibility)
 FULL_BASE_PROMPT = """You are playing as the Protagonist in Pokemon Emerald. You are a SPEEDRUNNER aiming for MAXIMUM EFFICIENCY.
 
 Your goal is to progress through the game as quickly as possible, reaching key milestones while minimizing wasted actions.
@@ -282,14 +412,29 @@ def get_compact_prompt(
     coords: tuple,
     recent_actions: str,
     objectives: str,
-    formatted_state: str
+    formatted_state: str,
+    use_objectives_in_prompt: bool = True,
+    active_objectives: List = None,
+    completed_objectives_ids: set = None
 ) -> str:
-    """Generate compact prompt for local/smaller models"""
+    """
+    Generate compact prompt for local/smaller models.
+
+    Args:
+        use_objectives_in_prompt: If True, embeds dynamic storyline objectives in the prompt
+        active_objectives: List of active objectives from agent state (for dynamic injection)
+        completed_objectives_ids: Set of completed objective IDs (for dynamic injection)
+    """
     context_guide = get_context_specific_guide(context)
 
-    return COMPACT_BASE_PROMPT.format(
+    if use_objectives_in_prompt and active_objectives is not None:
+        # Use dynamic objectives based on current game state
+        base_prompt = get_compact_base_prompt_with_dynamic_objectives(active_objectives, completed_objectives_ids or set())
+    else:
+        base_prompt = COMPACT_BASE_PROMPT
+
+    return base_prompt.format(
         recent_actions=recent_actions,
-        objectives=objectives,
         formatted_state=formatted_state,
         context_specific_guide=context_guide,
         context=context,
@@ -309,9 +454,19 @@ def get_full_prompt(
     frontier_suggestions: str = "",
     battle_analysis: str = "",
     movement_memory: str = "",
-    stuck_warning: str = ""
+    stuck_warning: str = "",
+    use_objectives_in_prompt: bool = True,
+    active_objectives: List = None,
+    completed_objectives_ids: set = None
 ) -> str:
-    """Generate full detailed prompt for cloud models"""
+    """
+    Generate full detailed prompt for cloud models.
+
+    Args:
+        use_objectives_in_prompt: If True, embeds dynamic storyline objectives in the prompt
+        active_objectives: List of active objectives from agent state (for dynamic injection)
+        completed_objectives_ids: Set of completed objective IDs (for dynamic injection)
+    """
     context_guide = get_context_specific_guide(context)
     context_rules = ""
 
@@ -321,7 +476,13 @@ def get_full_prompt(
     elif context == "dialogue":
         context_rules = "\n💬 DIALOGUE PRIORITY: Be patient, don't spam A. Wait for text to fully display."
 
-    return FULL_BASE_PROMPT.format(
+    if use_objectives_in_prompt and active_objectives is not None:
+        # Use dynamic objectives based on current game state
+        base_prompt = get_full_base_prompt_with_dynamic_objectives(active_objectives, completed_objectives_ids or set())
+    else:
+        base_prompt = FULL_BASE_PROMPT
+
+    return base_prompt.format(
         recent_actions=recent_actions,
         history_summary=history_summary,
         objectives=objectives,

@@ -41,7 +41,14 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from PIL import Image
 
-from utils.agent_helpers import update_server_metrics
+from utils.agent_helpers import (
+    update_server_metrics,
+    initialize_storyline_objectives,
+    load_history_from_llm_checkpoint,
+    save_history_to_llm_checkpoint,
+    analyze_movement_preview,
+    validate_movement_sequence,
+)
 from utils.pathfinding import Pathfinder
 from utils.state_formatter import format_state_for_llm
 from utils.battle_analyzer import BattleAnalyzer
@@ -271,186 +278,8 @@ class SimpleAgent:
 
     def _initialize_storyline_objectives(self):
         """Initialize the main storyline objectives for Pokémon Emerald progression"""
-        storyline_objectives = [
-            {
-                "id": "story_game_start",
-                "description": "Complete title sequence and begin the game",
-                "objective_type": "system",
-                "target_value": "Game Running",
-                "milestone_id": "GAME_RUNNING",
-            },
-            {
-                "id": "story_intro_complete",
-                "description": "Complete intro cutscene with moving van",
-                "objective_type": "cutscene",
-                "target_value": "Intro Complete",
-                "target_object": "S",
-                "milestone_id": "INTRO_CUTSCENE_COMPLETE",
-            },
-            {
-                "id": "story_player_house",
-                "description": "Enter player's house for the first time",
-                "objective_type": "location",
-                "target_value": "Player's House",
-                "milestone_id": "PLAYER_HOUSE_ENTERED",
-            },
-            {
-                "id": "story_player_bedroom",
-                "description": "Go upstairs to player's bedroom",
-                "objective_type": "location",
-                "target_value": "Player's Bedroom",
-                "milestone_id": "PLAYER_BEDROOM",
-            },
-            {
-                "id": "story_clock_set",
-                "description": "Set the clock on the wall in the player's bedroom. Interact with the clock at (5,1) by pressing A while facing it. Then, leave the house.",
-                "objective_type": "location",
-                "target_value": "Clock Set",
-                "target_floor": 2,
-                "target_coords": (5, 1),  # Clock position on 2nd floor
-                "milestone_id": "CLOCK_SET",
-            },
-            {
-                "id": "story_rival_house",
-                "description": "Visit May's house next door",
-                "objective_type": "location",
-                "target_value": "Rival's House",
-                "milestone_id": "RIVAL_HOUSE",
-            },
-            {
-                "id": "story_rival_bedroom",
-                "description": "Visit May's bedroom on the second floor",
-                "objective_type": "location",
-                "target_value": "Rival's Bedroom",
-                "milestone_id": "RIVAL_BEDROOM",
-            },
-            {
-                "id": "story_route_101",
-                "description": "Travel north to Route 101 and encounter Prof. Birch",
-                "objective_type": "location",
-                "target_value": "Route 101",
-                "milestone_id": "ROUTE_101",
-            },
-            {
-                "id": "story_starter_chosen",
-                "description": "Choose starter Pokémon and receive first party member",
-                "objective_type": "pokemon",
-                "target_value": "Starter Pokémon",
-                "milestone_id": "STARTER_CHOSEN",
-            },
-            {
-                "id": "story_birch_lab",
-                "description": "Visit Professor Birch's lab in Littleroot Town and receive the Pokedex",
-                "objective_type": "location",
-                "target_value": "Birch's Lab",
-                "milestone_id": "BIRCH_LAB_VISITED",
-            },
-            {
-                "id": "story_oldale_town",
-                "description": "Leave lab and continue journey north to Oldale Town",
-                "objective_type": "location",
-                "target_value": "Oldale Town",
-                "milestone_id": "OLDALE_TOWN",
-            },
-            {
-                "id": "story_route_103",
-                "description": "Travel to Route 103 to meet rival",
-                "objective_type": "location",
-                "target_value": "Route 103",
-                "milestone_id": "ROUTE_103",
-            },
-            {
-                "id": "story_received_pokedex",
-                "description": "Return to Birch's lab and receive the Pokédex",
-                "objective_type": "item",
-                "target_value": "Pokédex",
-                "milestone_id": "RECEIVED_POKEDEX",
-            },
-            {
-                "id": "story_route_102",
-                "description": "Return through Route 102 toward Petalburg City",
-                "objective_type": "location",
-                "target_value": "Route 102",
-                "milestone_id": "ROUTE_102",
-            },
-            {
-                "id": "story_petalburg_city",
-                "description": "Navigate to Petalburg City and visit Dad's gym",
-                "objective_type": "location",
-                "target_value": "Petalburg City",
-                "milestone_id": "PETALBURG_CITY",
-            },
-            {
-                "id": "story_dad_meeting",
-                "description": "Meet Dad at Petalburg City Gym",
-                "objective_type": "dialogue",
-                "target_value": "Dad Meeting",
-                "milestone_id": "DAD_FIRST_MEETING",
-            },
-            {
-                "id": "story_gym_explanation",
-                "description": "Receive explanation about Gym challenges",
-                "objective_type": "dialogue",
-                "target_value": "Gym Tutorial",
-                "milestone_id": "GYM_EXPLANATION",
-            },
-            {
-                "id": "story_route_104_south",
-                "description": "Travel through southern section of Route 104",
-                "objective_type": "location",
-                "target_value": "Route 104 South",
-                "milestone_id": "ROUTE_104_SOUTH",
-            },
-            {
-                "id": "story_petalburg_woods",
-                "description": "Navigate through Petalburg Woods to help Devon researcher",
-                "objective_type": "location",
-                "target_value": "Petalburg Woods",
-                "milestone_id": "PETALBURG_WOODS",
-            },
-            {
-                "id": "story_aqua_grunt",
-                "description": "Defeat Team Aqua Grunt in Petalburg Woods",
-                "objective_type": "battle",
-                "target_value": "Aqua Grunt Defeated",
-                "milestone_id": "TEAM_AQUA_GRUNT_DEFEATED",
-            },
-            {
-                "id": "story_route_104_north",
-                "description": "Travel through northern section of Route 104 to Rustboro",
-                "objective_type": "location",
-                "target_value": "Route 104 North",
-                "milestone_id": "ROUTE_104_NORTH",
-            },
-            {
-                "id": "story_rustboro_city",
-                "description": "Arrive in Rustboro City and deliver Devon Goods",
-                "objective_type": "location",
-                "target_value": "Rustboro City",
-                "milestone_id": "RUSTBORO_CITY",
-            },
-            {
-                "id": "story_rustboro_gym",
-                "description": "Enter the Rustboro Gym and challenge Roxanne",
-                "objective_type": "location",
-                "target_value": "Rustboro Gym",
-                "milestone_id": "RUSTBORO_GYM_ENTERED",
-            },
-            {
-                "id": "story_roxanne_defeated",
-                "description": "Defeat Gym Leader Roxanne",
-                "objective_type": "battle",
-                "target_value": "Roxanne Defeated",
-                "milestone_id": "ROXANNE_DEFEATED",
-            },
-            {
-                "id": "story_stone_badge",
-                "description": "Receive the Stone Badge and complete first gym",
-                "objective_type": "badge",
-                "target_value": "Stone Badge",
-                "milestone_id": "FIRST_GYM_COMPLETE",
-            },
-        ]
+        # Use helper function from utils to get storyline objectives data
+        storyline_objectives = initialize_storyline_objectives(self.state.objectives)
 
         # Add storyline objectives to the state
         for obj_data in storyline_objectives:
@@ -468,10 +297,6 @@ class SimpleAgent:
                 milestone_id=obj_data["milestone_id"],
             )
             self.state.objectives.append(objective)
-
-        logger.info(
-            f"Initialized {len(storyline_objectives)} storyline objectives for Emerald progression (up to first gym)"
-        )
 
     def get_game_context(self, game_state: Dict[str, Any]) -> str:
         """Determine current game context (overworld, battle, menu, dialogue)"""
@@ -1347,13 +1172,13 @@ class SimpleAgent:
             logger.warning(f"🚨 STUCK PRESSING B: Pressed B {b_count} times, trying A to advance/dismiss dialogue")
             return "A"
 
-        # If in detected dialogue and pressed A many times (10+), wait for dialogue to process
-        # Increased from 3 to 5 to avoid false positives from previous actions in history
+        # If in detected dialogue and pressed A many times (10+), call VLM to make intelligent decision
+        # instead of blindly waiting - VLM can see if dialogue progressed or if different action needed
         if context == "dialogue" and a_count >= 10:
             if has_active_dialogue:
-                # Dialogue still active after 10 A presses - wait for it to process
-                logger.info(f"⏳ Dialogue active, pressed A {a_count} times - waiting for dialogue to advance")
-                return "WAIT"
+                # Dialogue still active after 10 A presses - let VLM decide what to do
+                logger.warning(f"🤖 Dialogue active, pressed A {a_count} times - calling VLM to make intelligent decision instead of waiting")
+                # Fall through to VLM call below
             else:
                 # Dialogue not active but context says dialogue - might be residual, try to move
                 logger.warning(f"⚠️ Context says dialogue but memory says no dialogue - trying to move")
@@ -1362,9 +1187,9 @@ class SimpleAgent:
         # If in overworld but pressing A many times (likely stuck on NPC dialogue)
         if context == "overworld" and a_count >= 15:
             if has_active_dialogue:
-                # Dialogue is actually active - wait
-                logger.info(f"⏳ Overworld with active dialogue, pressed A {a_count} times - waiting")
-                return "WAIT"
+                # Dialogue is actually active - let VLM make decision instead of waiting
+                logger.warning(f"🤖 Overworld with active dialogue, pressed A {a_count} times - calling VLM to decide (may need B to exit, or different action)")
+                # Fall through to VLM call below
             else:
                 # No active dialogue detected - try to move away from NPC
                 logger.warning(f"🚨 Stuck pressing A in overworld, no dialogue detected - moving away")
@@ -1591,90 +1416,60 @@ class SimpleAgent:
 
                         if is_adjacent:
                             # We're right next to the target (e.g., standing in front of clock on wall)
-                            # First, make sure we're FACING the target
-                            dx = navigation_target[0] - coords[0]
-                            dy = navigation_target[1] - coords[1]
+                            # In Pokemon, pressing A while adjacent automatically faces the object
+                            # No need to manually face - just check if we've already interacted enough
 
-                            # Determine which direction to face
-                            if dx > 0:
-                                face_direction = "RIGHT"
-                            elif dx < 0:
-                                face_direction = "LEFT"
-                            elif dy > 0:
-                                face_direction = "DOWN"
-                            else:  # dy < 0
-                                face_direction = "UP"
+                            # For clock objective, check if we've completed the interaction sequence
+                            if obj.id == "story_clock_set":
+                                # Check if we've seen Mom's dialogue after setting clock
+                                mom_dialogue_seen = False
+                                a_presses_at_location = 0
 
-                            # Check if we just moved in that direction (already facing it)
-                            recent_actions_list = list(self.state.recent_actions)[-10:] if self.state.recent_actions else []
-                            if face_direction in recent_actions_list:
-                                # Already facing the target
-                                # Special handling for clock objective: check if we've completed the full sequence
-                                # (interact with clock → Mom appears → finish dialogue)
-                                if obj.id == "story_clock_set":
-                                    # Check if we've seen Mom's dialogue after setting clock
-                                    mom_dialogue_seen = False
-                                    a_presses_at_location = 0
+                                # Also check current game state for Mom's dialogue
+                                dialog_text = game_state.get("game", {}).get("dialog_text", "") or ""
+                                dialog_text_lower = dialog_text.lower() if dialog_text else ""
 
-                                    # Also check current game state for Mom's dialogue
-                                    dialog_text = game_state.get("game", {}).get("dialog_text", "") or ""
-                                    dialog_text_lower = dialog_text.lower() if dialog_text else ""
+                                for entry in list(self.state.history)[-30:]:
+                                    # Count A presses at clock position
+                                    if entry.player_coords == coords and entry.action_taken == "A":
+                                        a_presses_at_location += 1
+                                    # Check for Mom's dialogue (she talks about going downstairs)
+                                    if entry.game_state_summary:
+                                        summary_lower = entry.game_state_summary.lower()
+                                        if any(keyword in summary_lower for keyword in ["mom", "downstairs", "breakfast", "dad", "get going"]):
+                                            mom_dialogue_seen = True
+                                            logger.warning(f"📝 Detected Mom's dialogue in history: {entry.game_state_summary[:50]}")
 
-                                    for entry in list(self.state.history)[-30:]:
-                                        # Count A presses at clock position
-                                        if entry.player_coords == coords and entry.action_taken == "A":
-                                            a_presses_at_location += 1
-                                        # Check for Mom's dialogue (she talks about going downstairs)
-                                        if entry.game_state_summary:
-                                            summary_lower = entry.game_state_summary.lower()
-                                            if any(keyword in summary_lower for keyword in ["mom", "downstairs", "breakfast", "dad", "get going"]):
-                                                mom_dialogue_seen = True
-                                                logger.warning(f"📝 Detected Mom's dialogue in history: {entry.game_state_summary[:50]}")
+                                # Also check if current dialogue is from Mom
+                                if any(keyword in dialog_text_lower for keyword in ["downstairs", "breakfast", "dad", "get going"]):
+                                    mom_dialogue_seen = True
+                                    logger.warning(f"📝 Detected Mom's dialogue in current state: {dialog_text[:50]}")
 
-                                    # Also check if current dialogue is from Mom
-                                    if any(keyword in dialog_text_lower for keyword in ["downstairs", "breakfast", "dad", "get going"]):
-                                        mom_dialogue_seen = True
-                                        logger.warning(f"📝 Detected Mom's dialogue in current state: {dialog_text[:50]}")
-
-                                    # If we've pressed A many times AND seen Mom's dialogue, objective is complete
-                                    if a_presses_at_location >= 5 and mom_dialogue_seen:
-                                        logger.warning(f"✅ CLOCK OBJECTIVE COMPLETE: Set clock ({a_presses_at_location} A presses) and talked with Mom - clearing target")
-                                        obj.target_coords = None
-                                        break
-                                    elif a_presses_at_location >= 10:
-                                        # Pressed A 10+ times but haven't seen Mom dialogue yet
-                                        # Probably still in clock menu or dialogue - let VLM continue
-                                        logger.warning(f"⏳ Clock interaction: {a_presses_at_location} A presses, waiting for Mom's dialogue")
-                                else:
-                                    # For non-clock objectives, use simpler logic
-                                    a_presses_at_location = 0
-                                    for entry in list(self.state.history)[-20:]:
-                                        if entry.player_coords == coords and entry.action_taken == "A":
-                                            a_presses_at_location += 1
-
-                                    if a_presses_at_location >= 5:
-                                        # Generic interaction complete
-                                        logger.warning(f"✅ INTERACTION COMPLETE: Pressed A {a_presses_at_location} times at {coords} - clearing target")
-                                        obj.target_coords = None
-                                        break
-
-                                # Let VLM handle interaction (press A)
-                                logger.warning(f"🎯 CLAUDE DEBUG: Adjacent to target {navigation_target} and facing {face_direction} - letting VLM handle interaction")
-                                break
+                                # If we've pressed A many times AND seen Mom's dialogue, objective is complete
+                                if a_presses_at_location >= 5 and mom_dialogue_seen:
+                                    logger.warning(f"✅ CLOCK OBJECTIVE COMPLETE: Set clock ({a_presses_at_location} A presses) and talked with Mom - clearing target")
+                                    obj.target_coords = None
+                                    break
+                                elif a_presses_at_location >= 10:
+                                    # Pressed A 10+ times but haven't seen Mom dialogue yet
+                                    # Probably still in clock menu or dialogue - let VLM continue
+                                    logger.warning(f"⏳ Clock interaction: {a_presses_at_location} A presses, waiting for Mom's dialogue")
                             else:
-                                # Need to face the target first
-                                logger.warning(f"🎯 CLAUDE DEBUG: Adjacent to target {navigation_target} but not facing - turning {face_direction}")
-                                self.state.recent_actions.append(face_direction)
-                                history_entry = HistoryEntry(
-                                    timestamp=datetime.now(),
-                                    player_coords=coords,
-                                    map_id=map_id,
-                                    context=context,
-                                    action_taken=face_direction,
-                                    game_state_summary=f"Turning {face_direction} to face {navigation_target}",
-                                )
-                                self.state.history.append(history_entry)
-                                return face_direction
+                                # For non-clock objectives, use simpler logic
+                                a_presses_at_location = 0
+                                for entry in list(self.state.history)[-20:]:
+                                    if entry.player_coords == coords and entry.action_taken == "A":
+                                        a_presses_at_location += 1
+
+                                if a_presses_at_location >= 5:
+                                    # Generic interaction complete
+                                    logger.warning(f"✅ INTERACTION COMPLETE: Pressed A {a_presses_at_location} times at {coords} - clearing target")
+                                    obj.target_coords = None
+                                    break
+
+                            # Let VLM handle interaction (press A)
+                            logger.warning(f"🎯 CLAUDE DEBUG: Adjacent to target {navigation_target} - letting VLM handle interaction")
+                            break
 
                         # If distance is 2 and target is likely a wall object (blocked tile),
                         # try to move one step closer in the direction of the target
@@ -1927,12 +1722,18 @@ EXAMPLE - DO THIS INSTEAD:
             # Create prompt - use compact mode for local models or full mode for cloud (Phase 1.2)
             if use_compact_prompt:
                 # COMPACT MODE for local models (reduced token count)
+                # Get completed objectives for dynamic injection
+                completed_ids = {obj.id for obj in self.state.objectives if obj.completed}
+
                 prompt = get_compact_prompt(
                     context=context,
                     coords=coords,
                     recent_actions=recent_actions_str,
                     objectives=objectives_summary,
-                    formatted_state=formatted_state + "\n" + movement_memory
+                    formatted_state=formatted_state + "\n" + movement_memory,
+                    use_objectives_in_prompt=True,
+                    active_objectives=self.state.objectives,
+                    completed_objectives_ids=completed_ids
                 )
             else:
                 # FULL MODE for cloud models (context-aware detailed prompt)
@@ -1956,6 +1757,9 @@ EXAMPLE - DO THIS INSTEAD:
                         safe_warning = f"⚠️ BLOCKED DIRECTIONS at {coords}: {', '.join(sorted(blocked_dirs))} are unreachable. Safe: {', '.join(sorted(safe_directions))}"
                         combined_memory += "\n" + safe_warning if combined_memory else safe_warning
 
+                # Get completed objectives for dynamic injection
+                completed_ids = {obj.id for obj in self.state.objectives if obj.completed}
+
                 prompt = get_full_prompt(
                     context=context,
                     coords=coords,
@@ -1968,7 +1772,10 @@ EXAMPLE - DO THIS INSTEAD:
                     frontier_suggestions=frontier_suggestions if frontier_suggestions else "",
                     battle_analysis=battle_analysis if battle_analysis else "",
                     movement_memory=combined_memory if combined_memory else "",
-                    stuck_warning=stuck_warning if stuck_warning else ""
+                    stuck_warning=stuck_warning if stuck_warning else "",
+                    use_objectives_in_prompt=True,
+                    active_objectives=self.state.objectives,
+                    completed_objectives_ids=completed_ids
                 )
 
             # Apply model-specific optimizations (Phase 3.3)
@@ -2546,156 +2353,11 @@ EXAMPLE - DO THIS INSTEAD:
 
     def load_history_from_llm_checkpoint(self, checkpoint_file: str):
         """Load SimpleAgent history from LLM checkpoint file"""
-        try:
-            import json
-            import re
-            from datetime import datetime
-
-            from utils.llm_logger import get_llm_logger
-
-            if not os.path.exists(checkpoint_file):
-                logger.info(f"No checkpoint file found: {checkpoint_file}")
-                return False
-
-            # Use LLM logger to restore cumulative metrics first
-            llm_logger = get_llm_logger()
-            if llm_logger:
-                restored_step_count = llm_logger.load_checkpoint(checkpoint_file)
-                if restored_step_count is not None:
-                    logger.info(f"✅ LLM logger restored checkpoint with {restored_step_count} steps")
-                    # Update SimpleAgent step counter to match LLM logger
-                    self.state.step_counter = restored_step_count
-
-            with open(checkpoint_file, "r") as f:
-                checkpoint_data = json.load(f)
-
-            log_entries = checkpoint_data.get("log_entries", [])
-            restored_count = 0
-
-            for entry in log_entries:
-                if entry.get("type") == "interaction" and "simple_mode" in entry.get("interaction_type", ""):
-                    try:
-                        # Extract state info from prompt
-                        prompt = entry.get("prompt", "")
-                        response = entry.get("response", "")
-                        timestamp_str = entry.get("timestamp", "")
-
-                        # Parse coordinates from prompt
-                        coords_match = re.search(r"Position: X=(\d+), Y=(\d+)", prompt)
-                        coords = None
-                        if coords_match:
-                            coords = (int(coords_match.group(1)), int(coords_match.group(2)))
-
-                        # Parse context from prompt
-                        context = "overworld"  # default
-                        if "Game State: battle" in prompt:
-                            context = "battle"
-                        elif "DIALOGUE:" in prompt or "dialogue" in prompt.lower():
-                            context = "dialogue"
-                        elif "menu" in prompt.lower():
-                            context = "menu"
-
-                        # Extract action from response
-                        action_taken = "UNKNOWN"
-                        if "ACTION:" in response:
-                            action_section = response.split("ACTION:")[-1].strip()
-                            action_line = action_section.split("\n")[0].strip()
-                            action_taken = action_line
-
-                        # Parse timestamp
-                        timestamp = datetime.now()
-                        if timestamp_str:
-                            try:
-                                timestamp = datetime.fromisoformat(timestamp_str)
-                            except:
-                                pass
-
-                        # Create simplified game state summary
-                        game_state_summary = f"Position: {coords}" if coords else "Position unknown"
-                        if coords:
-                            game_state_summary += f" | Context: {context}"
-
-                        # Add reasoning summary
-                        reasoning = ""
-                        if "REASONING:" in response:
-                            reasoning_section = response.split("REASONING:")[-1].split("ACTION:")[0].strip()
-                            reasoning = reasoning_section
-
-                        action_with_reasoning = (
-                            f"{action_taken} | Reasoning: {reasoning}" if reasoning else action_taken
-                        )
-
-                        # Create history entry
-                        history_entry = HistoryEntry(
-                            timestamp=timestamp,
-                            player_coords=coords,
-                            map_id=None,  # Not available in checkpoint
-                            context=context,
-                            action_taken=action_with_reasoning,
-                            game_state_summary=game_state_summary,
-                        )
-
-                        self.state.history.append(history_entry)
-
-                        # Also add to recent actions if it's a valid action
-                        if action_taken and action_taken not in ["UNKNOWN", "WAIT"]:
-                            # Parse multiple actions if comma-separated
-                            actions = [a.strip() for a in action_taken.replace(",", " ").split()]
-                            for action in actions:
-                                if action in ["UP", "DOWN", "LEFT", "RIGHT", "A", "B", "START", "SELECT"]:
-                                    self.state.recent_actions.append(action)
-
-                        restored_count += 1
-
-                    except Exception as e:
-                        logger.warning(f"Error parsing checkpoint entry: {e}")
-                        continue
-
-            # Update step counter to match checkpoint
-            self.state.step_counter = restored_count
-
-            logger.info(f"✅ Restored {restored_count} history entries from {checkpoint_file}")
-            logger.info(f"   History: {len(self.state.history)} entries")
-            logger.info(f"   Recent actions: {len(self.state.recent_actions)} actions")
-            logger.info(f"   Step counter: {self.state.step_counter}")
-
-            return True
-
-        except Exception as e:
-            logger.error(f"❌ Failed to load history from checkpoint: {e}")
-            import traceback
-
-            traceback.print_exc()
-            return False
+        return load_history_from_llm_checkpoint(checkpoint_file, self.state, HistoryEntry, "step_counter")
 
     def save_history_to_llm_checkpoint(self, checkpoint_file: str = None):
         """Save SimpleAgent history using LLM logger checkpoint system"""
-        try:
-            from utils.llm_logger import get_llm_logger
-
-            # Get the global LLM logger instance
-            llm_logger = get_llm_logger()
-            if llm_logger is None:
-                logger.warning("No LLM logger available for checkpoint saving")
-                return False
-
-            # Save checkpoint using LLM logger which includes cumulative metrics
-            # The LLM logger will handle saving log_entries AND cumulative_metrics
-            # If checkpoint_file is None, it will use the cache folder
-            llm_logger.save_checkpoint(checkpoint_file, agent_step_count=self.state.step_counter)
-
-            logger.info(f"💾 Saved LLM checkpoint to {checkpoint_file}")
-            logger.info(f"   Step counter: {self.state.step_counter}")
-            logger.info(f"   History: {len(self.state.history)} entries")
-            logger.info(f"   Recent actions: {len(self.state.recent_actions)} actions")
-            return True
-
-        except Exception as e:
-            logger.error(f"❌ Failed to save LLM checkpoint: {e}")
-            import traceback
-
-            traceback.print_exc()
-            return False
+        return save_history_to_llm_checkpoint(checkpoint_file, self.state.step_counter)
 
     def record_failed_movement(self, coords: Tuple[int, int], direction: str, reason: str = "blocked"):
         """Record a failed movement attempt for future reference"""
@@ -2811,103 +2473,12 @@ EXAMPLE - DO THIS INSTEAD:
         self.state.movement_memory_action_counter = 0
 
     def analyze_movement_preview(self, game_state: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Analyze the movement preview data from game state to find valid moves.
-
-        Returns:
-            Dict with 'walkable_directions', 'blocked_directions', and 'special_tiles'
-        """
-        walkable_directions = []
-        blocked_directions = []
-        special_tiles = {}
-
-        # Look for movement preview in the formatted state
-        formatted_state = format_state_for_llm(game_state)
-        lines = formatted_state.split("\n")
-
-        in_movement_preview = False
-        for line in lines:
-            if "MOVEMENT PREVIEW:" in line:
-                in_movement_preview = True
-                continue
-
-            if in_movement_preview:
-                # Parse movement preview lines
-                # Format: "  UP   : ( 15, 10) [.] WALKABLE - Optional description"
-                if line.strip() and ":" in line:
-                    parts = line.strip().split(":")
-                    if len(parts) >= 2:
-                        direction = parts[0].strip()
-                        rest = parts[1].strip()
-
-                        if direction in ["UP", "DOWN", "LEFT", "RIGHT"]:
-                            if "WALKABLE" in rest:
-                                walkable_directions.append(direction)
-                                # Check for special tiles (check stairs before doors to avoid mislabeling)
-                                if "Stairs/Warp" in rest:
-                                    special_tiles[direction] = "stairs"
-                                elif "Door/Entrance" in rest:
-                                    special_tiles[direction] = "door"
-                                elif "Tall grass" in rest:
-                                    special_tiles[direction] = "grass"
-                                elif "Jump ledge" in rest and "can jump" in rest:
-                                    special_tiles[direction] = "ledge"
-                            elif "BLOCKED" in rest:
-                                blocked_directions.append(direction)
-                elif not line.strip():
-                    # Empty line typically ends the movement preview section
-                    in_movement_preview = False
-
-        return {
-            "walkable_directions": walkable_directions,
-            "blocked_directions": blocked_directions,
-            "special_tiles": special_tiles,
-        }
+        """Analyze the movement preview data from game state to find valid moves."""
+        return analyze_movement_preview(game_state)
 
     def validate_movement_sequence(self, movements: List[str], game_state: Dict[str, Any]) -> Tuple[bool, str]:
-        """
-        Validate if a sequence of movements is valid based on current state.
-
-        Args:
-            movements: List of movement directions
-            game_state: Current game state
-
-        Returns:
-            Tuple of (is_valid, reason)
-        """
-        if not movements:
-            return True, "No movements to validate"
-
-        # Special case: During intro/cutscene sequences, movement validation may not work correctly
-        # Skip strict validation for known special locations
-        try:
-            location = game_state.get('player', {}).get('location', '')
-            if location in ['MOVING_VAN', 'INTRO']:
-                logger.debug(f"Skipping strict movement validation in special location: {location}")
-                return True, f"Special location ({location}) - validation relaxed"
-        except Exception as e:
-            logger.debug(f"Error checking location for validation: {e}")
-
-        # Analyze current movement options
-        movement_info = self.analyze_movement_preview(game_state)
-        walkable = movement_info["walkable_directions"]
-        blocked = movement_info["blocked_directions"]
-
-        # Check first movement
-        first_move = movements[0].upper()
-        if first_move in blocked:
-            return False, f"First movement {first_move} is BLOCKED"
-
-        if first_move not in walkable and first_move in ["UP", "DOWN", "LEFT", "RIGHT"]:
-            return False, f"First movement {first_move} is not confirmed WALKABLE"
-
-        # For multiple movements, only allow if we're very confident
-        if len(movements) > 1:
-            # We can't predict beyond the first move accurately
-            # So we should discourage chaining unless explicitly safe
-            return False, "Cannot validate multi-step movements - use single steps instead"
-
-        return True, "Movement validated"
+        """Validate if a sequence of movements is valid based on current state."""
+        return validate_movement_sequence(movements, game_state)
 
     def get_history_stats(self) -> Dict[str, int]:
         """Get current history tracking statistics"""
