@@ -353,11 +353,16 @@ class SimpleAgent:
 
             # IMPORTANT: Cross-check with game_state to avoid false positives from residual text
             # If game_state is "overworld", don't trust dialogue detection alone
+            # If dialogue_detected says NO but game_state is "dialog", that's also stale
             game_state_value = game_state.get("game", {}).get("game_state", "").lower()
             if has_dialogue and game_state_value == "overworld":
                 # Dialogue detected but game_state says overworld - likely residual text
                 logger.debug(f"Dialogue detected but game_state is 'overworld' - treating as residual text")
                 has_dialogue = False
+            elif not has_dialogue and game_state_value == "dialog":
+                # Dialogue NOT detected but game_state says dialog - likely stale game_state
+                logger.debug(f"No dialogue detected but game_state is 'dialog' - treating as stale game_state")
+                # Keep has_dialogue as False (correct value)
 
             # Fallback to old method if dialogue_detected not available
             if not has_dialogue:

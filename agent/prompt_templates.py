@@ -128,15 +128,19 @@ BATTLE_PROMPT_SUFFIX = """
 DIALOGUE_PROMPT_SUFFIX = """
 💬 DIALOGUE DECISION GUIDE:
 🚨 **CRITICAL RULE #1: ALWAYS CHECK DIALOGUE STATE BEFORE MOVING**
-   - If you see "--- DIALOGUE ---" section in GAME STATE, dialogue is ACTIVE
-   - You MUST press A to dismiss dialogue BEFORE attempting any movement
+   - Dialogue is ONLY active if you see "--- DIALOGUE ---" section with dialogue text
+   - If "Game State: dialog" BUT NO "--- DIALOGUE ---" section → dialogue is NOT active, ignore the label
+   - You MUST press A to dismiss dialogue BEFORE attempting any movement (only when actually active)
    - NEVER move (UP/DOWN/LEFT/RIGHT) while dialogue is visible
    - The game will ignore movement commands during active dialogue
 
-⚠️ **IMPORTANT: IGNORE UI OVERLAYS IN THE IMAGE**
+⚠️ **IMPORTANT: HOW TO DETECT REAL DIALOGUE**
    - Text at the EDGES of the image (top/bottom) like "AUTO | Steps: XX | LLM Processing..." is NOT game dialogue
    - Status overlays, step counters, and debug text are NOT part of the game
-   - ONLY check the "--- DIALOGUE ---" section in the GAME STATE text for actual dialogue
+   - The "Game State: dialog" label can be stale/incorrect - IGNORE IT
+   - ONLY trust the "--- DIALOGUE ---" section
+   - If you see "--- DIALOGUE ---" with text → dialogue is active → press A
+   - If you DON'T see "--- DIALOGUE ---" section → dialogue is NOT active → safe to move
    - Do NOT confuse UI status text with game dialogue
 
 📋 DIALOGUE PROGRESSION:
@@ -179,10 +183,12 @@ DIALOGUE_PROMPT_SUFFIX = """
 OVERWORLD_PROMPT_SUFFIX = """
 🗺️ OVERWORLD NAVIGATION GUIDE:
 🚨 **CRITICAL RULE #0: CHECK FOR DIALOGUE FIRST**
-   - BEFORE any movement, check GAME STATE for "--- DIALOGUE ---" section
-   - If "--- DIALOGUE ---" is present → press A to dismiss it first
-   - If "--- DIALOGUE ---" is absent → safe to proceed with navigation
-   - Movement commands are IGNORED while dialogue is active
+   - Check the "=== GAME STATE ===" section for BOTH of these:
+     1. Look for "--- DIALOGUE ---" section with actual dialogue text
+     2. Check if "Game State: dialog" is shown
+   - Dialogue is ONLY active if you see "--- DIALOGUE ---" section with text
+   - If you see "Game State: dialog" BUT NO "--- DIALOGUE ---" section → dialogue is NOT active, ignore the "dialog" label
+   - Movement commands are IGNORED while dialogue is actually active
    - ⚠️ IGNORE UI overlays like "AUTO | Steps: XX | LLM Processing..." - these are NOT game dialogue!
 
 🧭 MOVEMENT RULES:
@@ -319,7 +325,8 @@ def get_full_base_prompt_with_dynamic_objectives(active_objectives: List, comple
 {{context_specific_rules}}
 
 🔹 CRITICAL REMINDERS:
-- **ALWAYS check for dialogue first** - Look for "--- DIALOGUE ---" in game state
+- **ALWAYS check for dialogue first** - Dialogue is ONLY active if "--- DIALOGUE ---" section exists with text
+- **Ignore "Game State: dialog" label** - It can be stale. Trust "--- DIALOGUE ---" section only
 - **If dialogue is active**: Press A to dismiss it BEFORE moving
 - **Check your current objective**: What storyline objective are you working on?
 - **Match action to objective**: Every action should help complete the current objective
@@ -376,7 +383,7 @@ Your goal is to progress through the game as quickly as possible, reaching key m
 Available actions: A, B, START, SELECT, UP, DOWN, LEFT, RIGHT, WAIT
 
 ⚠️ CRITICAL REMINDERS:
-- 🚨 **CHECK FOR DIALOGUE BEFORE MOVING**: Look for "--- DIALOGUE ---" in GAME STATE. If present, press A to dismiss. NEVER move while dialogue is active.
+- 🚨 **CHECK FOR DIALOGUE BEFORE MOVING**: Dialogue is ONLY active if "--- DIALOGUE ---" section exists with text. Ignore "Game State: dialog" label (can be stale). If "--- DIALOGUE ---" present, press A to dismiss. NEVER move while dialogue is active.
 - Don't press the same button more than 10 times in a row
 - If coordinates don't change after movement, there's an obstacle
 - Check MOVEMENT PREVIEW before each move
