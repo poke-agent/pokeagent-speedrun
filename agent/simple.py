@@ -48,6 +48,9 @@ from utils.agent_helpers import (
     save_history_to_llm_checkpoint,
     analyze_movement_preview,
     validate_movement_sequence,
+    configure_history_limits,
+    get_memory_usage_estimate,
+    get_objectives_state,
 )
 from utils.pathfinding import Pathfinder
 from utils.state_formatter import format_state_for_llm
@@ -2253,46 +2256,11 @@ EXAMPLE - DO THIS INSTEAD:
 
     def get_memory_usage_estimate(self) -> Dict[str, int]:
         """Estimate current memory usage for context management"""
-        history_chars = sum(len(str(entry)) for entry in self.state.history)
-        recent_actions_chars = sum(len(action) for action in self.state.recent_actions)
-        objectives_chars = sum(len(f"{obj.description} {obj.target_value}") for obj in self.state.objectives)
-
-        return {
-            "history_entries": len(self.state.history),
-            "history_chars": history_chars,
-            "recent_actions": len(self.state.recent_actions),
-            "recent_actions_chars": recent_actions_chars,
-            "objectives_count": len(self.state.objectives),
-            "objectives_chars": objectives_chars,
-            "estimated_total_chars": history_chars + recent_actions_chars + objectives_chars,
-        }
+        return get_memory_usage_estimate(self)
 
     def get_objectives_state(self) -> Dict[str, Any]:
         """Get objectives formatted for forwarding in game state"""
-        return {
-            "active": [
-                {
-                    "id": obj.id,
-                    "description": obj.description,
-                    "type": obj.objective_type,
-                    "target": obj.target_value,
-                    "created_at": obj.created_at.isoformat(),
-                }
-                for obj in self.get_active_objectives()
-            ],
-            "completed": [
-                {
-                    "id": obj.id,
-                    "description": obj.description,
-                    "type": obj.objective_type,
-                    "target": obj.target_value,
-                    "completed_at": obj.completed_at.isoformat() if obj.completed_at else None,
-                    "notes": obj.progress_notes,
-                }
-                for obj in self.get_completed_objectives()[-5:]  # Last 5 completed
-            ],
-            "updated": self.state.objectives_updated,
-        }
+        return get_objectives_state(self)
 
     def trim_history_for_context(self, max_chars: int = 4000):
         """Trim history to fit within context limits"""
@@ -2325,30 +2293,13 @@ EXAMPLE - DO THIS INSTEAD:
         movement_memory_clear_interval: int = None,
     ):
         """Configure history tracking parameters at runtime"""
-        if max_history_entries is not None:
-            # Create new deque with updated max length, preserving existing data
-            existing_history = list(self.state.history)
-            self.state.history = deque(existing_history, maxlen=max_history_entries)
-
-        if max_recent_actions is not None:
-            # Create new deque with updated max length, preserving existing data
-            existing_actions = list(self.state.recent_actions)
-            self.state.recent_actions = deque(existing_actions, maxlen=max_recent_actions)
-
-        if history_display_count is not None:
-            self.history_display_count = history_display_count
-
-        if actions_display_count is not None:
-            self.actions_display_count = actions_display_count
-
-        if movement_memory_clear_interval is not None:
-            self.movement_memory_clear_interval = movement_memory_clear_interval
-
-        logger.info(
-            f"Updated history configuration: {len(self.state.history)}/{self.state.history.maxlen} history, "
-            f"{len(self.state.recent_actions)}/{self.state.recent_actions.maxlen} actions, "
-            f"display {self.history_display_count}/{self.actions_display_count}, "
-            f"movement memory clear interval: {self.movement_memory_clear_interval}"
+        configure_history_limits(
+            self,
+            max_history_entries,
+            max_recent_actions,
+            history_display_count,
+            actions_display_count,
+            movement_memory_clear_interval
         )
 
     def load_history_from_llm_checkpoint(self, checkpoint_file: str):

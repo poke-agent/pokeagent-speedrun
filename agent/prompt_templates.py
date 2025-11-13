@@ -40,6 +40,11 @@ def get_speedrun_system_prompt_with_objectives() -> str:
 4. Will this action lead to a battle? (Avoid unless necessary)
 5. Have I done this before? (Check history to avoid loops)
 
+⚠️ **IMPORTANT: IGNORE UI OVERLAYS**
+   - Text like "AUTO | Steps: XX | LLM Processing..." at image edges is NOT game dialogue
+   - ONLY check "--- DIALOGUE ---" in GAME STATE text for actual dialogue
+   - Game dialogue appears in text boxes within the game frame, not UI overlays
+
 📝 OUTPUT FORMAT:
 THOUGHT: [speedrun analysis - why is this the fastest path for current objective?]
 ACTION: [single action]
@@ -70,6 +75,11 @@ SPEEDRUN_SYSTEM_PROMPT = """You are an EXPERT Pokemon Emerald speedrunner playin
 2. Is there a faster path? (Check map, consider warps)
 3. Will this action lead to a battle? (Avoid unless necessary)
 4. Have I done this before? (Check history to avoid loops)
+
+⚠️ **IMPORTANT: IGNORE UI OVERLAYS**
+   - Text like "AUTO | Steps: XX | LLM Processing..." at image edges is NOT game dialogue
+   - ONLY check "--- DIALOGUE ---" in GAME STATE text for actual dialogue
+   - Game dialogue appears in text boxes within the game frame, not UI overlays
 
 📝 OUTPUT FORMAT:
 THOUGHT: [speedrun analysis - why is this the fastest path?]
@@ -123,6 +133,12 @@ DIALOGUE_PROMPT_SUFFIX = """
    - NEVER move (UP/DOWN/LEFT/RIGHT) while dialogue is visible
    - The game will ignore movement commands during active dialogue
 
+⚠️ **IMPORTANT: IGNORE UI OVERLAYS IN THE IMAGE**
+   - Text at the EDGES of the image (top/bottom) like "AUTO | Steps: XX | LLM Processing..." is NOT game dialogue
+   - Status overlays, step counters, and debug text are NOT part of the game
+   - ONLY check the "--- DIALOGUE ---" section in the GAME STATE text for actual dialogue
+   - Do NOT confuse UI status text with game dialogue
+
 📋 DIALOGUE PROGRESSION:
 1. Press A ONCE to initiate dialogue with NPC (when facing them)
 2. Press A to advance through dialogue lines (text scrolls)
@@ -167,6 +183,7 @@ OVERWORLD_PROMPT_SUFFIX = """
    - If "--- DIALOGUE ---" is present → press A to dismiss it first
    - If "--- DIALOGUE ---" is absent → safe to proceed with navigation
    - Movement commands are IGNORED while dialogue is active
+   - ⚠️ IGNORE UI overlays like "AUTO | Steps: XX | LLM Processing..." - these are NOT game dialogue!
 
 🧭 MOVEMENT RULES:
 1. Use MOVEMENT PREVIEW to see exactly what happens each direction

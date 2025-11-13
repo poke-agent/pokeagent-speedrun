@@ -101,8 +101,11 @@ def initialize_storyline_objectives(objectives_list: List[Any]) -> List[Dict[str
                 "3. Press A to interact with the clock",
                 "4. Press UP to move cursor to YES",
                 "5. Press A to confirm YES and set the clock",
-                "6. Go downstairs and talk to Mom (she'll be downstairs now)",
-                "7. Exit the house through the front door"
+                "6. Mom will appear on Floor 2 and talk to you automatically",
+                "7. Press A to advance through Mom's dialogue (2-3 text boxes)",
+                "8. IMPORTANT: After Mom's dialogue ends, STOP pressing A!",
+                "9. Navigate to the stairs (S symbol)",
+                "10. Stand on the stairs and move DOWN to go to Floor 1, then exit the house"
             ]
         },
         {
@@ -541,6 +544,89 @@ def validate_movement_sequence(movements: List[str], game_state: Dict[str, Any])
         return False, "Cannot validate multi-step movements - use single steps instead"
 
     return True, "Movement validated"
+
+
+def configure_history_limits(
+    agent_state: Any,
+    max_history_entries: int = None,
+    max_recent_actions: int = None,
+    history_display_count: int = None,
+    actions_display_count: int = None,
+    movement_memory_clear_interval: int = None,
+) -> None:
+    """Configure history tracking parameters at runtime"""
+    from collections import deque
+
+    if max_history_entries is not None:
+        # Create new deque with updated max length, preserving existing data
+        existing_history = list(agent_state.state.history)
+        agent_state.state.history = deque(existing_history, maxlen=max_history_entries)
+
+    if max_recent_actions is not None:
+        # Create new deque with updated max length, preserving existing data
+        existing_actions = list(agent_state.state.recent_actions)
+        agent_state.state.recent_actions = deque(existing_actions, maxlen=max_recent_actions)
+
+    if history_display_count is not None:
+        agent_state.history_display_count = history_display_count
+
+    if actions_display_count is not None:
+        agent_state.actions_display_count = actions_display_count
+
+    if movement_memory_clear_interval is not None:
+        agent_state.movement_memory_clear_interval = movement_memory_clear_interval
+
+    logger.info(
+        f"Updated history configuration: {len(agent_state.state.history)}/{agent_state.state.history.maxlen} history, "
+        f"{len(agent_state.state.recent_actions)}/{agent_state.state.recent_actions.maxlen} actions, "
+        f"display {agent_state.history_display_count}/{agent_state.actions_display_count}, "
+        f"movement memory clear interval: {agent_state.movement_memory_clear_interval}"
+    )
+
+
+def get_memory_usage_estimate(agent_state: Any) -> Dict[str, int]:
+    """Estimate current memory usage for context management"""
+    history_chars = sum(len(str(entry)) for entry in agent_state.state.history)
+    recent_actions_chars = sum(len(action) for action in agent_state.state.recent_actions)
+    objectives_chars = sum(len(f"{obj.description} {obj.target_value}") for obj in agent_state.state.objectives)
+
+    return {
+        "history_entries": len(agent_state.state.history),
+        "history_chars": history_chars,
+        "recent_actions": len(agent_state.state.recent_actions),
+        "recent_actions_chars": recent_actions_chars,
+        "objectives_count": len(agent_state.state.objectives),
+        "objectives_chars": objectives_chars,
+        "estimated_total_chars": history_chars + recent_actions_chars + objectives_chars,
+    }
+
+
+def get_objectives_state(agent_state: Any) -> Dict[str, Any]:
+    """Get objectives formatted for forwarding in game state"""
+    return {
+        "active": [
+            {
+                "id": obj.id,
+                "description": obj.description,
+                "type": obj.objective_type,
+                "target": obj.target_value,
+                "created_at": obj.created_at.isoformat(),
+            }
+            for obj in agent_state.get_active_objectives()
+        ],
+        "completed": [
+            {
+                "id": obj.id,
+                "description": obj.description,
+                "type": obj.objective_type,
+                "target": obj.target_value,
+                "completed_at": obj.completed_at.isoformat() if obj.completed_at else None,
+                "notes": obj.progress_notes,
+            }
+            for obj in agent_state.get_completed_objectives()[-5:]  # Last 5 completed
+        ],
+        "updated": agent_state.state.objectives_updated,
+    }
 
 
 def format_dynamic_objectives_for_prompt(active_objectives: List[Any], completed_objectives_ids: set = None) -> str:
