@@ -737,17 +737,13 @@ class SimpleAgent:
             logger.error(f"❌ Error getting game state info in check_objective_completion: {e}", exc_info=True)
             return completed_ids
 
-        logger.debug(f"Checking objective completion at {coords} in context {context} with map_id {map_id}")
-
         for obj in self.get_active_objectives():
             should_complete = False
             notes = ""
 
-            logger.debug(f"Checking objective {obj.id}: {obj.description}")
-
             # SPECIAL CASE: Clock objective - use VLM-based detection via map NPCs
             if obj.id == "story_clock_set" and coords:
-                logger.info(f"🕐 Checking clock objective progress at {coords}")
+                logger.warning(f"🕐 Checking clock objective progress at {coords}")
 
                 # Check for Mom NPC on the map (appears at top of room after clock is set)
                 # Get NPC locations from game state
@@ -778,25 +774,25 @@ class SimpleAgent:
                 if obj._mom_appeared and current_context == "overworld" and dialogue_at_clock >= 2:
                     # Mom appeared, talked, and now we're back in overworld = Mom left
                     obj._mom_departed = True
-                    logger.info(f"🕐 Mom has departed after {dialogue_at_clock} dialogues")
+                    logger.warning(f"🕐 Mom has departed after {dialogue_at_clock} dialogues")
 
                 # Set forced reminder and completion based on state
                 if obj._mom_departed:
                     # Steps 1-8 done, Mom left - go to stairs
                     obj.forced_reminder = "🚨 CLOCK SET & MOM LEFT! Navigate RIGHT to stairs (S at X=7, Y=1) and press UP to go to Floor 1."
                     obj.current_step = 9
-                    logger.info(f"🕐 Setting reminder: Go to stairs at (7,1)")
+                    logger.warning(f"🕐 Setting reminder: Go to stairs at (7,1)")
 
                     # Complete if player reaches stairs
                     if coords in [(7, 1)]:
                         should_complete = True
                         notes = f"Clock objective complete (reached stairs at {coords})"
-                        logger.info(f"🕐 Auto-completing: {notes}")
+                        logger.warning(f"🕐 Auto-completing: {notes}")
                 elif obj._mom_appeared:
                     # Mom is here or just finished talking
                     obj.forced_reminder = "🚨 CLOCK SET! Mom is talking or just finished. Press A through her dialogue, then navigate to stairs."
                     obj.current_step = 7
-                    logger.info(f"🕐 Mom present, dialogues: {dialogue_at_clock}")
+                    logger.warning(f"🕐 Mom present, dialogues: {dialogue_at_clock}")
                 elif dialogue_at_clock >= 1:
                     # Started clock interaction
                     obj.forced_reminder = None  # Follow step-by-step instructions
@@ -1346,7 +1342,7 @@ class SimpleAgent:
 
             # Get active objectives (needed for both navigation and LLM prompt)
             active_objectives = self.get_active_objectives()
-            logger.warning(f"🎯 CLAUDE DEBUG: Active objectives count: {len(active_objectives)}")
+            # logger.warning(f"🎯 CLAUDE DEBUG: Active objectives count: {len(active_objectives)}")
             if active_objectives:
                 for obj in active_objectives:
                     logger.warning(f"  - {obj.description} (coords={obj.target_coords}, floor={obj.target_floor})")
