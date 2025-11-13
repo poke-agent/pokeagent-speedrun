@@ -469,13 +469,27 @@ def get_compact_prompt(
     else:
         base_prompt = COMPACT_BASE_PROMPT
 
-    return base_prompt.format(
+    # Inject forced reminders from active objectives
+    forced_reminder = ""
+    if active_objectives:
+        for obj in active_objectives:
+            if hasattr(obj, 'forced_reminder') and obj.forced_reminder:
+                forced_reminder = f"\n\n{'='*80}\n⚠️⚠️⚠️ CRITICAL FORCED REMINDER ⚠️⚠️⚠️\n{obj.forced_reminder}\n{'='*80}\n\n"
+                break  # Only show first forced reminder
+
+    prompt = base_prompt.format(
         recent_actions=recent_actions,
         formatted_state=formatted_state,
         context_specific_guide=context_guide,
         context=context,
         coords=coords
     )
+
+    # Inject forced reminder right after objectives section
+    if forced_reminder:
+        prompt = prompt.replace("⚡ FOCUS:", forced_reminder + "⚡ FOCUS:")
+
+    return prompt
 
 
 def get_full_prompt(
@@ -518,7 +532,15 @@ def get_full_prompt(
     else:
         base_prompt = FULL_BASE_PROMPT
 
-    return base_prompt.format(
+    # Inject forced reminders from active objectives
+    forced_reminder = ""
+    if active_objectives:
+        for obj in active_objectives:
+            if hasattr(obj, 'forced_reminder') and obj.forced_reminder:
+                forced_reminder = f"\n\n{'='*80}\n⚠️⚠️⚠️ CRITICAL FORCED REMINDER ⚠️⚠️⚠️\n{obj.forced_reminder}\n{'='*80}\n\n"
+                break  # Only show first forced reminder
+
+    prompt = base_prompt.format(
         recent_actions=recent_actions,
         history_summary=history_summary,
         objectives=objectives,
@@ -534,3 +556,9 @@ def get_full_prompt(
         context=context,
         coords=coords
     )
+
+    # Inject forced reminder right after objectives section
+    if forced_reminder:
+        prompt = prompt.replace("⚡ FOCUS:", forced_reminder + "⚡ FOCUS:")
+
+    return prompt

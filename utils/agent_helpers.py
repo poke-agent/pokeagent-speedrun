@@ -97,15 +97,15 @@ def initialize_storyline_objectives(objectives_list: List[Any]) -> List[Dict[str
             "milestone_id": "CLOCK_SET",
             "steps": [
                 "1. Navigate to coordinates (5,2) on Floor 2 (player's bedroom)",
-                "2. Face the clock on the wall and interact with the clock at (5,1) (position yourself next to it)",
-                "3. Press A to interact with the clock",
-                "4. Press UP to move cursor to YES",
-                "5. Press A to confirm YES and set the clock",
-                "6. Mom will appear on Floor 2 and talk to you automatically",
-                "7. Press A to advance through Mom's dialogue (2-3 text boxes)",
-                "8. IMPORTANT: After Mom's dialogue ends, STOP pressing A!",
-                "9. Navigate to the stairs (S symbol)",
-                "10. Stand on the stairs and move DOWN to go to Floor 1, then exit the house"
+                "2. Face UP (toward clock at 5,1) and press A to interact",
+                "3. Press A to dismiss 'The clock is stopped' message",
+                "4. Press A again to open time setting menu",
+                "5. You'll see YES/NO prompt - Press UP to select YES",
+                "6. Press A to confirm YES and set the clock",
+                "7. Mom will appear and talk to you automatically",
+                "8. Press A to advance through Mom's dialogue (2-3 text boxes)",
+                "9. After Mom leaves, navigate RIGHT to stairs (S at 9,2)",
+                "10. Stand on stairs and press DOWN to go to Floor 1, then exit house"
             ]
         },
         {

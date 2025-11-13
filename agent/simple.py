@@ -121,6 +121,8 @@ class Objective:
     progress_notes: str = ""
     storyline: bool = False  # True for main storyline objectives (auto-verified), False for agent sub-objectives
     milestone_id: Optional[str] = None  # Emulator milestone ID for storyline objectives
+    current_step: Optional[int] = None  # Current step index within multi-step objectives
+    forced_reminder: Optional[str] = None  # Persistent reminder injected into prompt until objective completes
 
 
 @dataclass
@@ -318,22 +320,20 @@ class SimpleAgent:
             game_section = game_state.get("game", {})
             party_raw = game_section.get("party")
 
-            # Debug: Log what we're seeing
-            logger.info(f"🔍 DEBUG: game_section type: {type(game_section)}")
-            logger.info(f"🔍 DEBUG: party_raw type: {type(party_raw)}, value: {party_raw}")
-
-            party = party_raw or []
+            # Handle party_raw - ensure it's a list
+            if isinstance(party_raw, list):
+                party = party_raw
+            else:
+                party = []
             has_pokemon = len(party) > 0
 
             # Check if player name is not set (indicates title sequence)
             # BUT: if we have Pokemon in party, we're definitely in-game even if name is corrupted
             player_name = game_state.get("player", {}).get("name", "").strip()
 
-            # Debug logging
-            if has_pokemon:
-                logger.info(f"✅ Context detection: Has Pokemon in party ({len(party)}), NOT title screen")
-            else:
-                logger.info(f"⚠️  Context detection: party is empty/None, has_pokemon={has_pokemon}")
+            # Debug logging (only when at title/intro transition)
+            if not has_pokemon and player_location == "TITLE_SEQUENCE":
+                logger.debug(f"Context detection: party is empty, at title sequence")
 
             if (not player_name or player_name == "????????") and not has_pokemon:
                 logger.info(
@@ -728,13 +728,83 @@ class SimpleAgent:
     def check_objective_completion(self, game_state: Dict[str, Any]) -> List[str]:
         """Check if any objectives should be marked as completed based on game state"""
         completed_ids = []
-        coords = self.get_player_coords(game_state)
-        context = self.get_game_context(game_state)
-        map_id = self.get_map_id(game_state)
+
+        try:
+            coords = self.get_player_coords(game_state)
+            context = self.get_game_context(game_state)
+            map_id = self.get_map_id(game_state)
+        except Exception as e:
+            logger.error(f"❌ Error getting game state info in check_objective_completion: {e}", exc_info=True)
+            return completed_ids
+
+        logger.debug(f"Checking objective completion at {coords} in context {context} with map_id {map_id}")
 
         for obj in self.get_active_objectives():
             should_complete = False
             notes = ""
+
+            logger.debug(f"Checking objective {obj.id}: {obj.description}")
+
+            # SPECIAL CASE: Clock objective - use VLM-based detection via map NPCs
+            if obj.id == "story_clock_set" and coords:
+                logger.info(f"🕐 Checking clock objective progress at {coords}")
+
+                # Check for Mom NPC on the map (appears at top of room after clock is set)
+                # Get NPC locations from game state
+                player_location = game_state.get("player", {}).get("location", "")
+
+                # Simple detection: If we have dialogue history at clock AND no longer in dialogue
+                # AND still at bedroom, then Mom dialogue is likely done
+                recent_history = list(self.state.history)[-20:]
+                dialogue_at_clock = sum(1 for entry in recent_history
+                                       if entry.player_coords == (5, 2) and entry.context == "dialogue")
+
+                # Track if we've seen an NPC appear (stored in objective state)
+                if not hasattr(obj, '_mom_appeared'):
+                    obj._mom_appeared = False
+                if not hasattr(obj, '_mom_departed'):
+                    obj._mom_departed = False
+
+                # Simple state machine based on dialogue count:
+                # - 1-2 dialogues: Initial clock interaction
+                # - 3-5 dialogues: Mom appeared and is talking
+                # - If dialogues stopped AND we're in overworld: Mom left
+
+                current_context = self.get_game_context(game_state)
+
+                if dialogue_at_clock >= 2:
+                    obj._mom_appeared = True
+
+                if obj._mom_appeared and current_context == "overworld" and dialogue_at_clock >= 2:
+                    # Mom appeared, talked, and now we're back in overworld = Mom left
+                    obj._mom_departed = True
+                    logger.info(f"🕐 Mom has departed after {dialogue_at_clock} dialogues")
+
+                # Set forced reminder and completion based on state
+                if obj._mom_departed:
+                    # Steps 1-8 done, Mom left - go to stairs
+                    obj.forced_reminder = "🚨 CLOCK SET & MOM LEFT! Navigate RIGHT to stairs (S at X=7, Y=1) and press UP to go to Floor 1."
+                    obj.current_step = 9
+                    logger.info(f"🕐 Setting reminder: Go to stairs at (7,1)")
+
+                    # Complete if player reaches stairs
+                    if coords in [(7, 1)]:
+                        should_complete = True
+                        notes = f"Clock objective complete (reached stairs at {coords})"
+                        logger.info(f"🕐 Auto-completing: {notes}")
+                elif obj._mom_appeared:
+                    # Mom is here or just finished talking
+                    obj.forced_reminder = "🚨 CLOCK SET! Mom is talking or just finished. Press A through her dialogue, then navigate to stairs."
+                    obj.current_step = 7
+                    logger.info(f"🕐 Mom present, dialogues: {dialogue_at_clock}")
+                elif dialogue_at_clock >= 1:
+                    # Started clock interaction
+                    obj.forced_reminder = None  # Follow step-by-step instructions
+                    obj.current_step = 3
+                else:
+                    # Haven't started yet
+                    obj.forced_reminder = None
+                    obj.current_step = 1
 
             if obj.objective_type == "location" and coords and obj.target_value:
                 # Check if player reached target location
@@ -1077,7 +1147,7 @@ class SimpleAgent:
         # CRITICAL: Check for map changes (warps, floor changes, entering buildings)
         # If map changed, clear navigation so VLM can see new environment first
         current_map_id = self.get_map_id(game_state)
-        logger.warning(f"🗺️ CLAUDE DEBUG: Map ID check: current={current_map_id}, last={getattr(self, 'last_map_id', 'NOT_SET')}")
+        # logger.warning(f"🗺️ CLAUDE DEBUG: Map ID check: current={current_map_id}, last={getattr(self, 'last_map_id', 'NOT_SET')}")
         if hasattr(self, 'last_map_id') and self.last_map_id is not None:
             if current_map_id != self.last_map_id:
                 logger.warning(f"🗺️ MAP CHANGE DETECTED: {self.last_map_id} → {current_map_id}")
@@ -1094,11 +1164,6 @@ class SimpleAgent:
         if context == "title":
             logger.info("⚡ Title sequence detected - pressing A to skip quickly")
             return "A"
-
-        # SMART DIALOGUE HANDLING: Use memory reader detection for better decisions
-        recent_actions = list(self.state.recent_actions)[-15:] if self.state.recent_actions else []
-        a_count = recent_actions.count("A")  # Count recent A presses
-        b_count = recent_actions.count("B")  # Count recent B presses
 
         # Check if dialogue is actively detected by memory reader
         dialogue_detected = game_state.get("game", {}).get("dialogue_detected", {})
@@ -1117,78 +1182,6 @@ class SimpleAgent:
         if dialogue_confidence < 0.5:
             has_active_dialogue = False
             logger.debug(f"Dialogue confidence too low ({dialogue_confidence}) - treating as no active dialogue")
-
-        # YES/NO MENU NOTE: The VLM is instructed to handle YES/NO menus via prominent prompts
-        # The prompts tell it: when you see YES/NO, press UP first (to select YES), then A
-        # No automatic detection needed - let VLM make decisions based on visual input
-
-        # DIALOGUE LOOP DETECTION: Check if we've seen the exact same dialogue text multiple times
-        # AND we're pressing A repeatedly without the dialogue changing
-        if has_active_dialogue and dialog_text and a_count >= 5:
-            # Check last few history entries for same dialogue
-            recent_history = list(self.state.history)[-15:]
-            same_text_count = 0
-            for entry in reversed(recent_history):
-                if dialog_text in entry.game_state_summary:
-                    same_text_count += 1
-                else:
-                    break
-
-            # Only trigger escape if we've pressed A 5+ times AND seen same dialogue 3+ times
-            # This means we're truly stuck in a loop, not just multi-box dialogue
-            if same_text_count >= 3:
-                logger.warning(
-                    f"🚨 DIALOGUE LOOP DETECTED: Same dialogue text seen {same_text_count} times AND pressed A {a_count} times - trying to escape"
-                )
-
-                # Check current coordinates to decide escape direction
-                coords = self.get_player_coords(game_state)
-
-                # Try different escape strategies based on repeat count
-                if same_text_count >= 6:
-                    # Very stuck - try moving in multiple directions to escape the trigger zone
-                    logger.warning("🚨 VERY STUCK: Trying to move away from dialogue trigger")
-                    # Move in opposite direction if possible
-                    if coords and coords[0] > 2:
-                        return "LEFT"  # Move left if on right side
-                    else:
-                        return "RIGHT"  # Move right if on left side
-                elif same_text_count >= 4:
-                    # Moderately stuck - try moving DOWN to escape
-                    logger.warning("🚨 MODERATELY STUCK: Trying to move DOWN")
-                    return "DOWN"
-                else:
-                    # Slightly stuck - try moving UP to escape
-                    logger.warning("🚨 SLIGHTLY STUCK: Trying to move UP")
-                    return "UP"
-
-        # If stuck pressing B repeatedly (dialogue won't close), try A instead
-        if b_count >= 10:
-            logger.warning(f"🚨 STUCK PRESSING B: Pressed B {b_count} times, trying A to advance/dismiss dialogue")
-            return "A"
-
-        # If in detected dialogue and pressed A many times (10+), call VLM to make intelligent decision
-        # instead of blindly waiting - VLM can see if dialogue progressed or if different action needed
-        if context == "dialogue" and a_count >= 10:
-            if has_active_dialogue:
-                # Dialogue still active after 10 A presses - let VLM decide what to do
-                logger.warning(f"🤖 Dialogue active, pressed A {a_count} times - calling VLM to make intelligent decision instead of waiting")
-                # Fall through to VLM call below
-            else:
-                # Dialogue not active but context says dialogue - might be residual, try to move
-                logger.warning(f"⚠️ Context says dialogue but memory says no dialogue - trying to move")
-                return "DOWN"  # Try to move away
-
-        # If in overworld but pressing A many times (likely stuck on NPC dialogue)
-        if context == "overworld" and a_count >= 15:
-            if has_active_dialogue:
-                # Dialogue is actually active - let VLM make decision instead of waiting
-                logger.warning(f"🤖 Overworld with active dialogue, pressed A {a_count} times - calling VLM to decide (may need B to exit, or different action)")
-                # Fall through to VLM call below
-            else:
-                # No active dialogue detected - try to move away from NPC
-                logger.warning(f"🚨 Stuck pressing A in overworld, no dialogue detected - moving away")
-                return "DOWN"
 
         # CRITICAL: Validate frame before any VLM processing
         if frame is None:
@@ -1297,6 +1290,8 @@ class SimpleAgent:
                 )
             except Exception as e:
                 logger.warning(f"Failed to format speedrun progress: {e}")
+
+            # logger.warning(f"🎯 CLAUDE DEBUG: Game state: {game_state}")
 
             # Check for objective completion first
             self.check_objective_completion(game_state)
