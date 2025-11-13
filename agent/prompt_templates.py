@@ -297,6 +297,11 @@ def get_full_base_prompt_with_dynamic_objectives(active_objectives: List, comple
 🎮 GAME MECHANICS:
 - **NPC Dialogue**: Press A once to start, A to advance, A again to close
 - **Sign/Object Reading**: Press A to read, A again to close
+- **YES/NO Menus** (CRITICAL): When you see YES/NO options (like "Is this the correct time?"):
+  • The cursor defaults to NO
+  • Press UP to move cursor to YES
+  • Then press A to confirm YES
+  • If you press A without moving cursor, you select NO!
 - **Menu Navigation**: B backs out of menus, START opens main menu
 - **Movement**: Face a direction before interacting (movement auto-faces)
 
@@ -328,6 +333,7 @@ def get_full_base_prompt_with_dynamic_objectives(active_objectives: List, comple
 - **ALWAYS check for dialogue first** - Dialogue is ONLY active if "--- DIALOGUE ---" section exists with text
 - **Ignore "Game State: dialog" label** - It can be stale. Trust "--- DIALOGUE ---" section only
 - **If dialogue is active**: Press A to dismiss it BEFORE moving
+- **⚠️ YES/NO MENUS**: If you see YES/NO options in the game frame, press UP first (to select YES), then A to confirm
 - **Check your current objective**: What storyline objective are you working on?
 - **Match action to objective**: Every action should help complete the current objective
 - **Movement during dialogue = IGNORED**: The game ignores movement commands during dialogue
@@ -355,6 +361,11 @@ Your goal is to progress through the game as quickly as possible, reaching key m
 🎮 GAME MECHANICS:
 - **NPC Dialogue**: Press A once to start, A to advance, A again to close
 - **Sign/Object Reading**: Press A to read, A again to close
+- **YES/NO Menus** (CRITICAL): When you see YES/NO options (like "Is this the correct time?"):
+  • The cursor defaults to NO
+  • Press UP to move cursor to YES
+  • Then press A to confirm YES
+  • If you press A without moving cursor, you select NO!
 - **Menu Navigation**: B backs out of menus, START opens main menu
 - **Movement**: Face a direction before interacting (movement auto-faces)
 
@@ -384,6 +395,7 @@ Available actions: A, B, START, SELECT, UP, DOWN, LEFT, RIGHT, WAIT
 
 ⚠️ CRITICAL REMINDERS:
 - 🚨 **CHECK FOR DIALOGUE BEFORE MOVING**: Dialogue is ONLY active if "--- DIALOGUE ---" section exists with text. Ignore "Game State: dialog" label (can be stale). If "--- DIALOGUE ---" present, press A to dismiss. NEVER move while dialogue is active.
+- 🚨 **YES/NO MENUS**: If you see YES/NO prompt (like "Is this the correct time?"), press UP to select YES, then A to confirm. Cursor defaults to NO!
 - Don't press the same button more than 10 times in a row
 - If coordinates don't change after movement, there's an obstacle
 - Check MOVEMENT PREVIEW before each move
