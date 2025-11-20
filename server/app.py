@@ -1218,12 +1218,13 @@ async def stream_agent_thinking():
         try:
             # Send initial connection message
             yield f"data: {json.dumps({'status': 'connected', 'timestamp': time.time()})}\n\n"
-            
-            # On startup, mark all existing interactions as "sent" to avoid flooding with old messages
-            # We only want to stream NEW interactions from this point forward
+
+            # On startup, send the last 3 recent interactions immediately for context
+            # Then mark all as "sent" to avoid duplicates
+            recent_interactions = []
             try:
                 log_files = sorted(glob.glob("llm_logs/llm_log_*.jsonl"))
-                for log_file in log_files:
+                for log_file in log_files[-2:]:  # Check last 2 files
                     if os.path.exists(log_file):
                         with open(log_file, 'r', encoding='utf-8') as f:
                             for line in f:
@@ -1232,9 +1233,31 @@ async def stream_agent_thinking():
                                     if entry.get("type") == "interaction":
                                         timestamp = entry.get("timestamp", "")
                                         if timestamp:
+                                            recent_interactions.append({
+                                                "type": entry.get("interaction_type", "unknown"),
+                                                "response": entry.get("response", ""),
+                                                "duration": entry.get("duration", 0),
+                                                "timestamp": timestamp
+                                            })
                                             sent_timestamps.add(timestamp)
                                 except:
                                     continue
+
+                # Send last 3 interactions on initial connection
+                for interaction in recent_interactions[-3:]:
+                    with step_lock:
+                        current_step = agent_step_count
+                    event_data = {
+                        "step": current_step,
+                        "type": interaction.get("type", "unknown"),
+                        "response": interaction.get("response", ""),
+                        "duration": interaction.get("duration", 0),
+                        "timestamp": interaction.get("timestamp", ""),
+                        "is_new": True
+                    }
+                    yield f"data: {json.dumps(event_data)}\n\n"
+                    logger.info(f"SSE: Sent recent interaction on connection: {interaction.get('type')}")
+
                 logger.info(f"SSE: Marked {len(sent_timestamps)} existing interactions as already sent")
             except Exception as init_e:
                 logger.warning(f"SSE: Error initializing sent timestamps: {init_e}")

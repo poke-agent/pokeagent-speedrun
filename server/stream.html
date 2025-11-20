@@ -509,7 +509,7 @@
         <div class="crt-flicker"></div>
         <div class="header">
             <div class="header-logo">PokeWaifu //</div>
-            <div class="header-title">PROTOCOL_EMERALD // AGENT = PLAYER</div>
+            <div class="header-title">EMERALD // AGENT = PLAYER</div>
             <div style="flex: 1"></div>
             <div
                 id="metrics-display"
@@ -843,15 +843,35 @@
                             return;
                         }
 
-                        console.log("New agent message received:", data.step);
+                        console.log("New agent message received:", data);
+                        console.log("  Step:", data.step);
+                        console.log("  Type:", data.type);
+                        console.log("  Duration:", data.duration);
+                        console.log(
+                            "  Response length:",
+                            data.response?.length || 0,
+                        );
+
+                        // Determine backend type from data.type (e.g., "lmstudio_simple_mode")
+                        const backendType = data.type
+                            ?.toLowerCase()
+                            .includes("lmstudio")
+                            ? "AI"
+                            : data.type?.toLowerCase().includes("gemini")
+                              ? "Gemini"
+                              : data.type?.toLowerCase().includes("openai")
+                                ? "OpenAI"
+                                : data.type?.toLowerCase().includes("anthropic")
+                                  ? "Claude"
+                                  : "VLM";
 
                         // Create new message element
                         const messageDiv = document.createElement("div");
                         messageDiv.className = "llm-entry streaming";
                         messageDiv.innerHTML = `
-                        <div class="llm-step">Step ${data.step}:</div>
+                        <div class="llm-step">Step ${data.step} [${backendType}]:</div>
                         <div class="llm-message" id="streaming-message-${data.step}-${Date.now()}"></div>
-                        <div class="llm-meta">${data.type} (${data.duration?.toFixed(2)}s)</div>
+                        <div class="llm-meta">(${data.duration?.toFixed(2)}s)</div>
                     `;
 
                         // Add to container
@@ -938,12 +958,32 @@
                                 const baseStep = data.current_step || 0;
                                 const stepNumber = baseStep;
 
+                                // Determine backend type
+                                const interactionType = interaction.type || "";
+                                const backendType = interactionType
+                                    .toLowerCase()
+                                    .includes("lmstudio")
+                                    ? "LMStudio"
+                                    : interactionType
+                                            .toLowerCase()
+                                            .includes("gemini")
+                                      ? "Gemini"
+                                      : interactionType
+                                              .toLowerCase()
+                                              .includes("openai")
+                                        ? "OpenAI"
+                                        : interactionType
+                                                .toLowerCase()
+                                                .includes("anthropic")
+                                          ? "Claude"
+                                          : "VLM";
+
                                 // Trim whitespace from the response
                                 const trimmedResponse =
                                     interaction.response.trim();
 
                                 html += `<div class="llm-entry complete">
-                            <div class="llm-step">Step ${stepNumber}:</div>
+                            <div class="llm-step">Step ${stepNumber} [${backendType}]:</div>
                             <div class="llm-message">${trimmedResponse}</div>
                         </div>`;
                             },
