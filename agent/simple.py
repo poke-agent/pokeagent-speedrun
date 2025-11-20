@@ -778,15 +778,17 @@ class SimpleAgent:
 
                 # Set forced reminder and completion based on state
                 if obj._mom_departed:
-                    # Steps 1-8 done, Mom left - go to stairs
-                    obj.forced_reminder = "🚨 CLOCK SET & MOM LEFT! Navigate RIGHT to stairs (S at X=7, Y=1) and press UP to go to Floor 1."
-                    obj.current_step = 9
-                    logger.warning(f"🕐 Setting reminder: Go to stairs at (7,1)")
-
-                    # Complete if player reaches stairs
-                    if coords in [(7, 1)]:
+                    # Steps 1-8 done, Mom left - go to stairs and then exit house
+                    if current_floor == 2:
+                        # On floor 2, need to go to stairs
+                        obj.forced_reminder = "🚨 CLOCK SET & MOM LEFT! Navigate RIGHT to stairs (S at X=7, Y=1) and press UP to go to Floor 1."
+                        obj.current_step = 9
+                        logger.warning(f"🕐 Setting reminder: Go to stairs at (7,1)")
+                    else:
+                        # On floor 1, objective complete - clear reminder to allow next objective
+                        obj.forced_reminder = None
                         should_complete = True
-                        notes = f"Clock objective complete (reached stairs at {coords})"
+                        notes = f"Clock objective complete (now on Floor 1)"
                         logger.warning(f"🕐 Auto-completing: {notes}")
                 elif obj._mom_appeared:
                     # Mom is here or just finished talking
@@ -1511,6 +1513,13 @@ class SimpleAgent:
                             if location in ['MOVING_VAN', 'INTRO']:
                                 logger.info(f"🚫 Skipping auto-navigation in special location: {location} (will use VLM instead)")
                                 break  # Skip auto-navigation, let VLM handle it
+
+                            # Check if this objective has a forced_reminder - if so, disable auto-navigation
+                            # and let VLM follow the forced reminder instructions instead
+                            if hasattr(obj, 'forced_reminder') and obj.forced_reminder:
+                                logger.info(f"🚫 CLAUDE DEBUG: Objective has forced_reminder - disabling auto-navigation, letting VLM handle it")
+                                logger.info(f"📝 CLAUDE DEBUG: Forced reminder: {obj.forced_reminder}")
+                                break  # Skip auto-navigation, let VLM follow forced reminder
 
                             # Check if we're in dialogue/menu context - don't auto-navigate during these
                             # Don't allow super_stuck to override dialogue - dialogue must complete first!

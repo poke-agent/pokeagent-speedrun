@@ -509,12 +509,33 @@ def reset_game():
         step_count = 0
     print("Game and milestone reset complete")
 
+def auto_progress_title_screen():
+    """Auto-progress past title screen using action queue (safe, non-blocking)"""
+    global action_queue
+
+    # Wait for server to fully start and game loop to begin
+    time.sleep(3)
+
+    print("🎮 Auto-progressing past title screen via action queue...")
+    try:
+        # Queue START button presses to progress past title screen
+        # Game loop will process these naturally
+        for i in range(5):
+            if not running:
+                break
+            action_queue.append("start")
+            time.sleep(1)  # Wait 1 second between queued presses
+
+        print("✅ Auto-progress START buttons queued")
+    except Exception as e:
+        print(f"⚠️  Auto-progress error (non-fatal): {e}")
+
 def game_loop(manual_mode=False):
     """Main game loop - runs in main thread, always headless"""
     global running, step_count
-    
+
     print("Starting headless game loop...")
-    
+
     while running:
         # Handle input
         should_continue, actions_pressed = handle_input(manual_mode)
@@ -2572,7 +2593,13 @@ def main():
     # Start FastAPI server in background thread
     server_thread = threading.Thread(target=run_fastapi_server, args=(args.port,), daemon=True)
     server_thread.start()
-    
+
+    # Start auto-progress thread (if not loading a state)
+    if not args.load_state:
+        auto_progress_thread = threading.Thread(target=auto_progress_title_screen, daemon=True)
+        auto_progress_thread.start()
+        print("🎮 Auto-progress thread started (will run in 2 seconds)")
+
     # Get local IP for network access
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from utils.get_local_ip import get_local_ip
@@ -2637,15 +2664,18 @@ def init_for_multiprocess():
             
             env = EmeraldEmulator(rom_path=rom_path)
             env.initialize()
-            
+
             # Initialize video recording if requested
             init_video_recording(record_video)
-            
+
             # Disable OCR if requested
             if no_ocr and env and env.memory_reader:
                 env.memory_reader._dialog_detection_enabled = False
                 print("🚫 All dialogue detection disabled (--no-ocr flag)")
-            
+
+            # Auto-progress will happen in background thread after FastAPI starts
+            # (Moved to avoid blocking server startup)
+
             # Load state if specified
             if load_state:
                 try:

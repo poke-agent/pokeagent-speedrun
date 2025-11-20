@@ -138,18 +138,24 @@ async def get_status():
     }
 
 if __name__ == "__main__":
-    
+
     parser = argparse.ArgumentParser(description="Pokemon Frame Server")
     parser.add_argument("--port", type=int, default=8001, help="Port to run on")
-    parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind to")
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
     args = parser.parse_args()
-    
-    print(f"🖼️ Starting Pokemon Frame Server on {args.host}:{args.port}")
+
+    print(f"🖼️  Starting Pokemon Frame Server on {args.host}:{args.port}")
     print(f"📁 Frame cache: {FRAME_CACHE_FILE}")
-    
+    print(f"🌐 Accessible at: http://localhost:{args.port}/frame")
+
     # Start background frame updater
     frame_thread = threading.Thread(target=frame_updater, daemon=True)
     frame_thread.start()
-    
+    print(f"✅ Frame updater thread started")
+
     # Start server
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    try:
+        uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    except Exception as e:
+        print(f"❌ Frame server error: {e}")
+        sys.exit(1)

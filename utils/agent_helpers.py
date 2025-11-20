@@ -103,8 +103,8 @@ def initialize_storyline_objectives(objectives_list: List[Any]) -> List[Dict[str
                 "5. You'll see YES/NO prompt - Press UP to select YES",
                 "6. Press A to confirm YES and set the clock",
                 "7. Mom will appear and talk to you automatically",
-                "8. Press A to advance through Mom's dialogue (2-3 text boxes)",
-                "9. After Mom leaves, navigate RIGHT to stairs (S at 9,2)",
+                "8. Press A to advance through Mom's dialogue (3-4 text boxes)",
+                "9. After Mom leaves, navigate RIGHT to stairs (S at 7,1)",
                 "10. Stand on stairs and press DOWN to go to Floor 1, then exit house"
             ]
         },
@@ -673,19 +673,29 @@ def format_dynamic_objectives_for_prompt(active_objectives: List[Any], completed
 
         # Add special instructions for current objective
         if i == 0:
-            # Show detailed steps if available
-            if obj.get("steps"):
-                formatted_lines.append("     📋 STEP-BY-STEP INSTRUCTIONS:")
-                for step in obj["steps"]:
-                    formatted_lines.append(f"        {step}")
-            else:
-                # Fallback to basic hints if no steps provided
-                if obj.get("target_coords"):
-                    formatted_lines.append(f"     📍 Navigate to: {obj['target_coords']}")
-                if obj.get("target_floor"):
-                    formatted_lines.append(f"     🪜 Floor: {obj['target_floor']}")
-                if obj.get("target_object"):
-                    formatted_lines.append(f"     🔍 Look for: {obj['target_object']}")
+            # Check if this objective has a forced_reminder (overrides normal instructions)
+            has_forced_reminder = False
+            for active_obj in active_objectives:
+                if active_obj.id == obj_data["id"]:
+                    if hasattr(active_obj, 'forced_reminder') and active_obj.forced_reminder:
+                        has_forced_reminder = True
+                        logger.info(f"🔍 FORMATTER: Objective '{obj_data['id']}' has forced_reminder, skipping normal step-by-step instructions")
+                    break
+
+            # Only show detailed steps if there's NO forced reminder
+            if not has_forced_reminder:
+                if obj.get("steps"):
+                    formatted_lines.append("     📋 STEP-BY-STEP INSTRUCTIONS:")
+                    for step in obj["steps"]:
+                        formatted_lines.append(f"        {step}")
+                else:
+                    # Fallback to basic hints if no steps provided
+                    if obj.get("target_coords"):
+                        formatted_lines.append(f"     📍 Navigate to: {obj['target_coords']}")
+                    if obj.get("target_floor"):
+                        formatted_lines.append(f"     🪜 Floor: {obj['target_floor']}")
+                    if obj.get("target_object"):
+                        formatted_lines.append(f"     🔍 Look for: {obj['target_object']}")
 
     formatted_lines.extend([
         "",

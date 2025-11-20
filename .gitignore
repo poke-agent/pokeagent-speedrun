@@ -189,3 +189,6 @@ cython_debug/
 
 *.mp4
 .pokeagent_cache/*
+/poke.AI-master
+/.claude
+/checkpoints/milestones

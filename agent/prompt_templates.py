@@ -5,7 +5,10 @@ Phase 1.2 implementation from TRACK2_SIMPLE_AGENT_OPTIMIZATION_PLAN.md
 Provides specialized prompts for different game contexts (battle, dialogue, overworld).
 """
 
+import logging
 from typing import List
+
+logger = logging.getLogger(__name__)
 
 
 def get_speedrun_system_prompt_with_objectives() -> str:
@@ -472,9 +475,14 @@ def get_compact_prompt(
     # Inject forced reminders from active objectives
     forced_reminder = ""
     if active_objectives:
+        logger.info(f"🔍 COMPACT PROMPT: Checking {len(active_objectives)} objectives for forced reminders")
         for obj in active_objectives:
+            has_attr = hasattr(obj, 'forced_reminder')
+            value = getattr(obj, 'forced_reminder', None) if has_attr else None
+            logger.info(f"🔍 COMPACT PROMPT: Objective '{obj.description[:50]}...' has_attr={has_attr} value={value}")
             if hasattr(obj, 'forced_reminder') and obj.forced_reminder:
                 forced_reminder = f"\n\n{'='*80}\n⚠️⚠️⚠️ CRITICAL FORCED REMINDER ⚠️⚠️⚠️\n{obj.forced_reminder}\n{'='*80}\n\n"
+                logger.info(f"🔍 COMPACT PROMPT: FOUND forced reminder! Will inject: {obj.forced_reminder}")
                 break  # Only show first forced reminder
 
     prompt = base_prompt.format(
@@ -485,9 +493,15 @@ def get_compact_prompt(
         coords=coords
     )
 
-    # Inject forced reminder right after objectives section
+    # Inject forced reminder BEFORE objectives section to override current objective
     if forced_reminder:
-        prompt = prompt.replace("⚡ FOCUS:", forced_reminder + "⚡ FOCUS:")
+        logger.info(f"🔍 COMPACT PROMPT: Injecting forced reminder BEFORE objectives section")
+        # Inject at the very beginning of the objectives section, before "🎯 CURRENT OBJECTIVE"
+        prompt = prompt.replace("🎯 CURRENT OBJECTIVE & NEXT STEPS:",
+                                forced_reminder + "🎯 CURRENT OBJECTIVE & NEXT STEPS:")
+        logger.info(f"🔍 COMPACT PROMPT: Injection complete, prompt length={len(prompt)}")
+    else:
+        logger.info(f"🔍 COMPACT PROMPT: No forced reminder to inject")
 
     return prompt
 
@@ -535,9 +549,14 @@ def get_full_prompt(
     # Inject forced reminders from active objectives
     forced_reminder = ""
     if active_objectives:
+        logger.info(f"🔍 FULL PROMPT: Checking {len(active_objectives)} objectives for forced reminders")
         for obj in active_objectives:
+            has_attr = hasattr(obj, 'forced_reminder')
+            value = getattr(obj, 'forced_reminder', None) if has_attr else None
+            logger.info(f"🔍 FULL PROMPT: Objective '{obj.description[:50]}...' has_attr={has_attr} value={value}")
             if hasattr(obj, 'forced_reminder') and obj.forced_reminder:
                 forced_reminder = f"\n\n{'='*80}\n⚠️⚠️⚠️ CRITICAL FORCED REMINDER ⚠️⚠️⚠️\n{obj.forced_reminder}\n{'='*80}\n\n"
+                logger.info(f"🔍 FULL PROMPT: FOUND forced reminder! Will inject: {obj.forced_reminder}")
                 break  # Only show first forced reminder
 
     prompt = base_prompt.format(
@@ -557,8 +576,14 @@ def get_full_prompt(
         coords=coords
     )
 
-    # Inject forced reminder right after objectives section
+    # Inject forced reminder BEFORE objectives section to override current objective
     if forced_reminder:
-        prompt = prompt.replace("⚡ FOCUS:", forced_reminder + "⚡ FOCUS:")
+        logger.info(f"🔍 FULL PROMPT: Injecting forced reminder BEFORE objectives section")
+        # Inject at the very beginning of the objectives section, before "🎯 CURRENT OBJECTIVE"
+        prompt = prompt.replace("🎯 CURRENT OBJECTIVE & NEXT STEPS:",
+                                forced_reminder + "🎯 CURRENT OBJECTIVE & NEXT STEPS:")
+        logger.info(f"🔍 FULL PROMPT: Injection complete, prompt length={len(prompt)}")
+    else:
+        logger.info(f"🔍 FULL PROMPT: No forced reminder to inject")
 
     return prompt

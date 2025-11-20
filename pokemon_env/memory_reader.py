@@ -2073,13 +2073,21 @@ class PokemonEmeraldReader:
                 current_height = self._read_u32(self._map_buffer_addr - 4)
                 
                 # If dimensions changed significantly, buffer may be corrupted
-                if (abs(current_width - self._map_width) > 5 or 
+                if (abs(current_width - self._map_width) > 5 or
                     abs(current_height - self._map_height) > 5 or
                     current_width <= 0 or current_height <= 0 or
                     current_width > 1000 or current_height > 1000):
-                    
-                    # Use unified rate limiter for corruption warnings
-                    self._rate_limited_warning(f"Map buffer corruption detected: dimensions changed from {self._map_width}x{self._map_height} to {current_width}x{current_height}", "map_corruption")
+
+                    # Check if we're in a known transition state (intro, cutscene, warp)
+                    # These states often have 0x0 maps temporarily
+                    is_transition = (current_width == 0 and current_height == 0)
+
+                    if is_transition:
+                        # This is expected during transitions, use debug level
+                        logger.debug(f"Map buffer transitioning: dimensions changed from {self._map_width}x{self._map_height} to {current_width}x{current_height}")
+                    else:
+                        # Unexpected corruption, use warning level
+                        self._rate_limited_warning(f"Map buffer corruption detected: dimensions changed from {self._map_width}x{self._map_height} to {current_width}x{current_height}", "map_corruption")
                     
                     self._map_buffer_addr = None
                     self._map_width = None
@@ -2484,14 +2492,16 @@ class PokemonEmeraldReader:
             # Dialogue detection result - only if dialog detection is enabled
             if self._dialog_detection_enabled:
                 dialogue_active = self.is_in_dialog()
-                
+
                 # Update dialogue cache with current state
                 self._update_dialogue_cache(dialog_text if 'dialog_text' in locals() else None, dialogue_active)
-                
+
                 # Use cached dialogue state for additional validation
                 cached_active, cached_text = self.get_cached_dialogue_state()
             else:
+                # In no-ocr mode, clear the dialogue cache to prevent stale detection
                 dialogue_active = False
+                self._update_dialogue_cache(None, False)  # Clear cache
                 cached_active = False
                 cached_text = ""
             
@@ -2572,9 +2582,18 @@ class PokemonEmeraldReader:
             
             unknown_ratio = unknown_count / total_tiles if total_tiles > 0 else 0
             logger.info(f"📊 PRE-PROCESSING TILES: {unknown_ratio:.1%} unknown ({unknown_count}/{total_tiles}), {corruption_count} corrupted")
-            
+
             state["map"]["tiles"] = tiles
-            
+
+            # Add map bank and number for map ID construction
+            try:
+                state["map"]["bank"] = self._read_u8(self.addresses.MAP_BANK)
+                state["map"]["number"] = self._read_u8(self.addresses.MAP_NUMBER)
+            except Exception as e:
+                logger.warning(f"Failed to read map bank/number: {e}")
+                state["map"]["bank"] = None
+                state["map"]["number"] = None
+
             # Process tiles for enhanced information (keep minimal processing here)
             tile_names = []
             metatile_behaviors = []

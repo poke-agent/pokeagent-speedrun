@@ -98,16 +98,33 @@ def start_server(args):
 def start_frame_server(port):
     """Start the lightweight frame server for stream.html visualization"""
     try:
-        frame_cmd = ["python", "-m", "server.frame_server", "--port", str(port+1)]
+        # Use the same Python executable that's running this script
+        python_exe = sys.executable
+        frame_cmd = [python_exe, "-m", "server.frame_server", "--port", str(port+1), "--host", "0.0.0.0"]
+
+        # Don't use PIPE for stdout/stderr - let them go to console or devnull
+        # Using PIPE can cause deadlocks if buffers fill up
         frame_process = subprocess.Popen(
             frame_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
         )
-        print(f"🖼️  Frame server started with PID {frame_process.pid}")
+        print(f"🖼️  Frame server started with PID {frame_process.pid} on port {port+1}")
+        print(f"🎥 Frame server URL: http://localhost:{port+1}")
+
+        # Give it a moment to start
+        time.sleep(0.5)
+
+        # Check if it's still running
+        if frame_process.poll() is not None:
+            print(f"⚠️  Frame server exited immediately with code {frame_process.returncode}")
+            return None
+
         return frame_process
     except Exception as e:
         print(f"⚠️ Could not start frame server: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -142,8 +159,8 @@ def main():
                        help="Max tokens for LM Studio responses (default: 500, lower = faster)")
     parser.add_argument("--lmstudio-timeout", type=int, default=60,
                        help="Timeout in seconds for LM Studio API calls (default: 60)")
-    parser.add_argument("--lmstudio-cooldown", type=float, default=15.0,
-                       help="Cooldown in seconds between LM Studio API calls (default: 15.0)")
+    parser.add_argument("--lmstudio-cooldown", type=float, default=25.0,
+                       help="Cooldown in seconds between LM Studio API calls (default: 25.0)")
     parser.add_argument("--scaffold", type=str, default="simple",
                        choices=["simple", "react"],
                        help="Agent scaffold: simple (default) or react")
