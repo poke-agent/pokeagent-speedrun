@@ -1,256 +1,167 @@
-# PokéAgent Challenge: RPG Speedrunning Agent in Pokémon Emerald
+# PokéAgent Speedrun
 
-![PokéAgent Challenge: RPG Speedrunning Agent in Pokémon Emerald](emerald.png)
+![PokéAgent Speedrun - Autonomous AI Agent for Pokémon Emerald](ss1.png)
 
-An AI agent that plays Pokémon Emerald using vision-language models to perceive the game environment, plan actions, and execute gameplay strategies. This is a **starter kit** designed to be easily customizable for different VLMs and agent behaviors.
+> **Pokéthon Submission** - The first Poké-themed Hackathon by [CreatorBid](https://creator.bid/) × [Base](https://base.org/) ecosystem
+
+An autonomous AI agent that plays Pokémon Emerald using vision-language models (VLMs). The agent perceives the game through screenshots, plans strategic actions, maintains contextual memory, and executes button inputs to progress through the game - all without human intervention.
+
+## Hackathon Context
+
+This project was built for **Pokéthon** - a hackathon dedicated to building AI Pokémon-inspired Agents, combining AI autonomy, collectibles, and real-world asset (RWA) integration within the Web3 ecosystem.
+
+**Why This Fits Pokéthon:**
+- **AI Autonomy**: Fully autonomous agent making decisions without human input
+- **Pokémon-Inspired**: Built specifically for Pokémon Emerald speedrunning
+- **Web3 Ready**: Architecture supports on-chain integration and tokenized agent ownership
+- **Collectible Potential**: Each trained agent instance can have unique strategies and personalities
+- **RWA Integration**: Agent performance metrics can be tied to real-world value through CreatorBid's launchpad
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [Features](#features)
-- [Directory Structure](#directory-structure)
-- [Requirements](#requirements)
+- [Hackathon Context](#hackathon-context)
+- [Key Features](#key-features)
+- [Quick Start](#quick-start)
+- [Architecture](#architecture)
 - [Installation](#installation)
-  - [1. Clone the Repository](#1-clone-the-repository)
-  - [2. Create Conda Environment (Recommended)](#2-create-conda-environment-recommended)
-  - [3. Install mgba System Library (Required for Python bindings)](#3-install-mgba-system-library-required-for-python-bindings)
-  - [4. Install Compatible libffi in Conda (Important!)](#4-install-compatible-libffi-in-conda-important)
-  - [5. Install Python Dependencies](#5-install-python-dependencies)
-  - [6. Set up Game ROM](#6-set-up-game-rom)
 - [VLM Backend Setup](#vlm-backend-setup)
-  - [OpenAI](#-openai-gpt-4v-o3-mini-etc)
-  - [OpenRouter](#-openrouter-access-to-many-models)
-  - [Google Gemini](#-google-gemini)
-  - [Local HuggingFace Models](#-local-huggingface-models)
-  - [Auto Backend Detection](#-auto-backend-detection)
 - [Running the Agent](#running-the-agent)
-- [Command Line Options](#command-line-options)
+- [Agent Scaffolds](#agent-scaffolds)
 - [Customizing Agent Behavior](#customizing-agent-behavior-prompt-editing-guide)
-- [Advanced Configuration](#advanced-configuration)
-- [Troubleshooting](#troubleshooting)
-- [Submission Instructions](#submission-instructions)
-- [Citation](#citation)
+- [Technical Details](#technical-details)
 - [License](#license)
 
-## Overview
+## Key Features
 
-This project implements an AI agent capable of playing Pokémon Emerald on a Game Boy Advance emulator. The agent uses a vision-language model (VLM) to analyze game frames, understand the current game state, and make intelligent decisions to progress through the game.
+| Feature | Description |
+|---------|-------------|
+| **Multi-VLM Support** | OpenAI GPT-4o, Google Gemini, Claude, and local HuggingFace models |
+| **Vision-Based Perception** | Analyzes game frames using state-of-the-art VLMs |
+| **Strategic Planning** | Multiple agent scaffolds (Simple, ReAct, Four-Module) |
+| **Persistent Memory** | Tracks objectives, action history, and progress across sessions |
+| **A* Pathfinding** | Advanced navigation with collision detection and NPC avoidance |
+| **Real-Time Streaming** | Web interface for live visualization at `localhost:8000/stream` |
+| **Checkpoint System** | Save/restore progress for long-running speedrun attempts |
+| **Video Recording** | Automatic MP4 recording for submission verification |
 
-The system is built with a modular architecture that separates perception, planning, memory, and action execution into distinct components that communicate through a message-passing system.
+## Quick Start
 
-## Features
+```bash
+# 1. Install dependencies
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv sync && source .venv/bin/activate
 
-- **Multiple VLM Backends**: Support for OpenAI, OpenRouter, Google Gemini, and local HuggingFace models
-- **Vision-based game perception**: Uses VLMs to analyze and understand game frames
-- **Strategic planning**: Develops high-level plans based on game observations
-- **Memory management**: Maintains context about the game state and progress
-- **Intelligent action selection**: Chooses appropriate GBA button inputs based on the current situation
-- **Advanced Map System**: Location-based persistent maps with portal coordinate tracking
-- **Spatial Navigation**: Bidirectional portal connections show exact transition coordinates between locations
-- **NPC Detection**: Real-time NPC detection and display on maps to help avoid blocked movement
-- **Movement Memory**: Tracks failed movements and NPC interactions for better navigation
-- **LLM-Controlled Pathfinding**: Intelligent pathfinding decisions made directly by the language model
-- **Checkpoint Persistence**: Maps and connections persist across game sessions with checkpoint system
-- **Web interface**: Visualize the agent's thought process and game state in real-time
-- **Modular architecture**: Easily extendable with new capabilities
-- **Customizable prompts**: Easy-to-edit prompt system for different agent behaviors
+# 2. Install mGBA (macOS)
+brew install mgba
 
-## Directory Structure
+# 3. Set API key
+export GEMINI_API_KEY="your-key-here"
+
+# 4. Run the agent
+python run.py --scaffold simple --agent-auto --backend gemini
+```
+
+Watch the agent play at: **http://localhost:8000/stream**
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    PokéAgent Speedrun                       │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌─────────────────┐          ┌─────────────────┐          │
+│  │  Server Process │◀────────▶│  Client Process │          │
+│  │  (mGBA Emulator)│   HTTP   │   (AI Agent)    │          │
+│  └────────┬────────┘          └────────┬────────┘          │
+│           │                            │                    │
+│           ▼                            ▼                    │
+│    ┌─────────────┐            ┌─────────────────┐          │
+│    │ Game State  │            │   VLM Backend   │          │
+│    │ Screenshots │            │ (Gemini/GPT-4o) │          │
+│    └─────────────┘            └─────────────────┘          │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Data Flow:**
+1. Server captures game state and screenshots from emulator
+2. Client requests state via HTTP API
+3. Agent formats state for LLM processing
+4. VLM analyzes frame and decides next action
+5. Action sent back to server for execution
+6. Repeat continuously for autonomous gameplay
+
+## Technical Details
+
+<details>
+<summary><strong>Directory Structure</strong></summary>
 
 ```
 pokeagent-speedrun/
-├── README.md
-├── requirements.txt
-├── run.py                 # Main AI agent implementation (direct emulator integration)
-├── server/                  # Server components (multiprocess mode)
-│   ├── __init__.py
-│   ├── app.py               # FastAPI server for multiprocess mode
-│   ├── frame_server.py      # Frame streaming server
-│   └── stream.html          # Web interface for streaming
-├── agent/                   # Four-module agent architecture (EDIT THESE FILES TO CUSTOMIZE BEHAVIOR)
-│   ├── __init__.py
-│   ├── system_prompt.py     # Main system prompt 
-│   ├── perception.py        # Perception module + prompts
-│   ├── planning.py          # Planning module + prompts
-│   ├── memory.py            # Memory module + prompts
-│   ├── action.py            # Action module + prompts
-│   └── simple.py            # Simple mode implementation (bypasses four-module architecture)
-├── utils/
-│   ├── __init__.py
-│   ├── vlm.py               # VLM backend implementations (OpenAI, Gemini, local models)
-│   ├── helpers.py           # Helper functions
-│   ├── state_formatter.py   # Game state formatting utilities
-│   ├── anticheat.py         # Anti-cheat tracking and verification
-│   ├── llm_logger.py        # Comprehensive LLM interaction logging
-│   ├── ocr_dialogue.py      # OCR-based dialogue detection
-│   ├── map_formatter.py     # Map visualization and formatting
-│   ├── map_stitcher.py      # Map stitching utilities
-│   ├── map_visualizer.py    # Map visualization tools
-│   ├── headless_recorder.py # Video recording capabilities
-│   └── get_local_ip.py      # Network utilities
-├── pokemon_env/             # Pokémon environment wrapper (mGBA integration)
-│   ├── __init__.py
-│   ├── emulator.py          # Core emulator integration
-│   ├── memory_reader.py     # Game state memory reading (DO NOT MODIFY)
-│   ├── emerald_utils.py     # Pokémon Emerald specific utilities
-│   ├── enums.py             # Game enumerations
-│   ├── types.py             # Type definitions
-│   └── utils.py             # Environment utilities
-├── tests/                   # Test suite and validation
-│   ├── run_tests.py         # Main test runner
-│   ├── states/              # Test save states with ground truth data
-│   ├── ground_truth/        # Reference data for validation
-│   └── test_*.py            # Individual test files
-├── Emerald-GBAdvance/       # Game ROM and save states
-│   ├── rom.gba              # Pokémon Emerald ROM (not included)
-│   └── *.state              # Various starting save states
-├── llm_logs/                # LLM interaction logs (auto-generated)
-└── *.mp4                    # Video recordings (auto-generated with --record)
+├── run.py                   # Main entry point
+├── agent/                   # Agent architectures (customize here!)
+│   ├── system_prompt.py     # Core agent personality
+│   ├── simple.py            # Lightweight agent scaffold
+│   ├── react.py             # ReAct reasoning agent
+│   └── perception.py        # Four-module perception
+├── server/                  # Emulator server & web UI
+│   ├── app.py               # FastAPI server
+│   └── stream.html          # Live streaming interface
+├── utils/                   # Utilities
+│   ├── vlm.py               # VLM backends (OpenAI, Gemini, etc.)
+│   ├── pathfinding.py       # A* navigation
+│   └── map_*.py             # Map visualization
+├── pokemon_env/             # mGBA emulator integration
+│   └── memory_reader.py     # Game state reader (DO NOT MODIFY)
+└── Emerald-GBAdvance/       # ROM and save states
 ```
+
+</details>
 
 ## Requirements
 
-- Python 3.10 - 3.11
-- Pokémon Emerald ROM (not included - obtain legally)
-- One of the supported VLM backends (see VLM Setup section)
+- **Python**: 3.10 - 3.11
+- **ROM**: Pokémon Emerald (obtain legally, place at `Emerald-GBAdvance/rom.gba`)
+- **VLM API Key**: Gemini, OpenAI, or OpenRouter
 
 ## Installation
 
-### 1. Clone the Repository
-
 ```bash
+# Clone and setup
 git clone https://github.com/sethkarten/pokeagent-speedrun
 cd pokeagent-speedrun
-```
 
-### 2. Install uv and Set Up Environment
-
-```bash
-# Install uv if not already installed
+# Install uv and dependencies
 curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Create virtual environment and install dependencies
 uv sync
-
-# Activate the virtual environment
 source .venv/bin/activate
-```
 
-### 3. Install mgba System Library (Required for Python bindings)
+# Install mGBA emulator
+# macOS:
+brew install mgba
 
-Download and install the official Ubuntu package from the [mGBA downloads page](https://mgba.io/downloads.html):
-
-Example for 20.04:
-```bash
+# Ubuntu:
 wget https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-ubuntu64-focal.tar.xz
 tar -xf mGBA-0.10.5-ubuntu64-focal.tar.xz
 sudo dpkg -i mGBA-0.10.5-ubuntu64-focal/libmgba.deb
+
+# Place ROM at Emerald-GBAdvance/rom.gba
 ```
-
-Mac OS x86_64 Instructions:
-```bash
-# arch -x86_64 /bin/zsh     # m-series Macs for backwards compatibility
-brew install mgba
-```
-
-### 4. Install Python Dependencies
-
-The dependencies are automatically installed when you run `uv sync` in step 2.
-
-If you need to reinstall or update dependencies:
-
-```bash
-uv sync
-```
-
-For development dependencies:
-
-```bash
-uv sync --dev
-```
-
-### 5. Set up Game ROM
-
-**Important**: You must obtain a Pokémon Emerald ROM file legally (e.g., dump from your own cartridge).
-
-1. Place your ROM file in the `Emerald-GBAdvance/` directory and rename it to `rom.gba`:
-   ```
-   pokeagent-speedrun/
-   └── Emerald-GBAdvance/
-       └── rom.gba  # Your Pokémon Emerald ROM file here
-   ```
-
-2. Ensure it's a valid Pokémon Emerald ROM. The SHA-1 hash should be `f3ae088181bf583e55daf962a92bb46f4f1d07b7` for the US English version.
 
 ## VLM Backend Setup
 
-The agent supports multiple VLM backends. Choose one based on your needs:
+| Backend | API Key | Command |
+|---------|---------|---------|
+| **Gemini** (recommended) | `GEMINI_API_KEY` | `python run.py --backend gemini --model-name gemini-2.5-flash` |
+| **OpenAI** | `OPENAI_API_KEY` | `python run.py --backend openai --model-name gpt-4o` |
+| **OpenRouter** | `OPENROUTER_API_KEY` | `python run.py --backend openrouter --model-name anthropic/claude-3.5-sonnet` |
+| **Local** | None | `python run.py --backend local --model-name Qwen/Qwen2-VL-2B-Instruct` |
 
-### 🔸 OpenAI (GPT-4V, o3-mini, etc.)
-
-**Best for: Quick setup, reliable performance**
-
-1. Set environment variable:
 ```bash
-export OPENAI_API_KEY="your-api-key-here"
+# Set your API key
+export GEMINI_API_KEY="your-key-here"
 ```
-
-2. Run agent:
-```bash
-python run.py --backend openai --model-name "gpt-4o"
-```
-
-Supported models: `gpt-4o`, `gpt-4-turbo`, `o3-mini`, etc.
-
-### 🔸 OpenRouter (Access to many models)
-
-**Best for: Trying different models, cost optimization**
-
-1. Set environment variable:
-```bash
-export OPENROUTER_API_KEY="your-api-key-here"
-```
-
-2. Run agent:
-```bash
-python run.py --backend openrouter --model-name "anthropic/claude-3.5-sonnet"
-```
-
-Supported models: `anthropic/claude-3.5-sonnet`, `google/gemini-pro-vision`, `openai/gpt-4o`, etc.
-
-### 🔸 Google Gemini
-
-**Best for: Google ecosystem integration**
-
-1. Set environment variable:
-```bash
-export GEMINI_API_KEY="your-api-key-here"
-# OR
-export GOOGLE_API_KEY="your-api-key-here"
-```
-
-2. Run agent:
-```bash
-python run.py --backend gemini --model-name "gemini-2.5-flash"
-```
-
-Supported models: `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, etc.
-
-### 🔸 Local HuggingFace Models
-
-**Best for: Privacy, no API costs, customization**
-
-1. Install additional dependencies:
-```bash
-pip install torch transformers bitsandbytes accelerate
-```
-
-2. Run agent:
-```bash
-python run.py --backend local --model-name "Qwen/Qwen2-VL-2B-Instruct"
-```
-
-Supported models: `Qwen/Qwen2-VL-2B-Instruct`, `Qwen/Qwen2-VL-7B-Instruct`, `microsoft/Phi-3.5-vision-instruct`, `llava-hf/llava-1.5-7b-hf`, etc.
 
 ## Running the Agent
 
